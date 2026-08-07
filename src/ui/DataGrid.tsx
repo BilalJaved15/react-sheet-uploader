@@ -189,6 +189,9 @@ export function DataGrid({
     setActive(focusTarget);
     setEditing(null);
     scrollCellIntoView(focusTarget);
+    // Jumping here from the problems panel should hand the keyboard over too,
+    // otherwise the arrows would still be driving the panel behind us.
+    scrollerRef.current?.focus({ preventScroll: true });
   }, [focusTarget, scrollCellIntoView]);
 
   /* ---------------------------------------------------------------------- */
@@ -399,6 +402,17 @@ export function DataGrid({
     [fieldByKey, onEdit, openPicker, recordIndexById, records, usesPicker],
   );
 
+  /**
+   * Returns focus to the grid.
+   *
+   * Whenever an editor or dropdown unmounts, focus would otherwise fall back to
+   * the document body and the arrow keys would scroll the grid instead of
+   * moving between cells.
+   */
+  const refocusGrid = useCallback(() => {
+    scrollerRef.current?.focus({ preventScroll: true });
+  }, []);
+
   const commitEdit = useCallback(() => {
     if (!editing) return;
     const record = records[recordIndexById.get(editing.recordId) ?? -1];
@@ -407,32 +421,67 @@ export function DataGrid({
       onEdit([{ recordId: editing.recordId, fieldKey: editing.fieldKey, value: draft }]);
     }
     setEditing(null);
-  }, [draft, editing, onEdit, recordIndexById, records]);
+    refocusGrid();
+  }, [draft, editing, onEdit, recordIndexById, records, refocusGrid]);
 
-  const cancelEdit = useCallback(() => setEditing(null), []);
+  const cancelEdit = useCallback(() => {
+    setEditing(null);
+    refocusGrid();
+  }, [refocusGrid]);
 
   /**
-   * Moves the active cell.
+   * The active cell, falling back to the first one.
+   *
+   * Keyboard navigation must never be a no-op just because nothing has been
+   * clicked yet: without an anchor the browser would scroll the grid on the
+   * arrow keys instead of moving the selection.
+   */
+  const resolveActive = useCallback((): CellAddress | null => {
+    if (active) return active;
+    const record = records[0];
+    const field = visibleFields[0];
+    if (!record || !field) return null;
+    return { recordId: record.id, fieldKey: field.key };
+  }, [active, records, visibleFields]);
+
+  const focusCell = useCallback(
+    (next: CellAddress) => {
+      setActive(next);
+      scrollCellIntoView(next);
+    },
+    [scrollCellIntoView],
+  );
+
+  /** Appends a row and moves onto it. Returns false when rows cannot be added. */
+  const appendAndFocus = useCallback(
+    (fieldKey: string): boolean => {
+      if (!onAppendRow) return false;
+      const newId = onAppendRow();
+      if (!newId) return false;
+
+      const next = { recordId: newId, fieldKey };
+      setActive(next);
+      // The row does not exist in the DOM until the parent re-renders.
+      requestAnimationFrame(() => scrollCellIntoView(next));
+      return true;
+    },
+    [onAppendRow, scrollCellIntoView],
+  );
+
+  /**
+   * Moves the active cell by a row/column delta, clamped at the edges.
    *
    * Stepping down off the last row appends a new one, so a manual entry grows
    * as the user types rather than starting as a wall of blank rows.
    */
   const moveActive = useCallback(
-    (rowDelta: number, columnDelta: number) => {
-      if (!active) return;
-      const rowIndex = recordIndexById.get(active.recordId);
-      const columnIndex = visibleFields.findIndex((field) => field.key === active.fieldKey);
+    (from: CellAddress, rowDelta: number, columnDelta: number) => {
+      const rowIndex = recordIndexById.get(from.recordId);
+      const columnIndex = visibleFields.findIndex((field) => field.key === from.fieldKey);
       if (rowIndex === undefined || columnIndex < 0) return;
 
-      if (rowDelta > 0 && rowIndex === records.length - 1 && onAppendRow) {
-        const newId = onAppendRow();
-        if (newId) {
-          const next = { recordId: newId, fieldKey: active.fieldKey };
-          setActive(next);
-          // The row does not exist in the DOM until the parent re-renders.
-          requestAnimationFrame(() => scrollCellIntoView(next));
-          return;
-        }
+      if (rowDelta > 0 && rowIndex === records.length - 1) {
+        if (appendAndFocus(from.fieldKey)) return;
       }
 
       const nextRow = Math.min(records.length - 1, Math.max(0, rowIndex + rowDelta));
@@ -442,11 +491,42 @@ export function DataGrid({
       const field = visibleFields[nextColumn];
       if (!record || !field) return;
 
-      const next = { recordId: record.id, fieldKey: field.key };
-      setActive(next);
-      scrollCellIntoView(next);
+      focusCell({ recordId: record.id, fieldKey: field.key });
     },
-    [active, onAppendRow, recordIndexById, records, scrollCellIntoView, visibleFields],
+    [appendAndFocus, focusCell, recordIndexById, records, visibleFields],
+  );
+
+  /**
+   * Moves one cell forwards or backwards in reading order, wrapping rows.
+   *
+   * This is what Tab does in a spreadsheet: at the end of a row it continues on
+   * the next one rather than stopping dead at the last column.
+   */
+  const stepCell = useCallback(
+    (from: CellAddress, direction: 1 | -1) => {
+      const rowIndex = recordIndexById.get(from.recordId);
+      const columnIndex = visibleFields.findIndex((field) => field.key === from.fieldKey);
+      if (rowIndex === undefined || columnIndex < 0) return;
+
+      const width = visibleFields.length;
+      if (width === 0) return;
+
+      const target = rowIndex * width + columnIndex + direction;
+      if (target < 0) return;
+
+      // Tabbing past the very last cell continues onto a fresh row.
+      if (target >= records.length * width) {
+        appendAndFocus(visibleFields[0]?.key ?? from.fieldKey);
+        return;
+      }
+
+      const record = records[Math.floor(target / width)];
+      const field = visibleFields[target % width];
+      if (!record || !field) return;
+
+      focusCell({ recordId: record.id, fieldKey: field.key });
+    },
+    [appendAndFocus, focusCell, recordIndexById, records, visibleFields],
   );
 
   const handleKeyDown = useCallback(
@@ -464,8 +544,6 @@ export function DataGrid({
         return;
       }
 
-      if (!active) return;
-
       if (editing) {
         if (event.key === 'Escape') {
           event.preventDefault();
@@ -473,54 +551,67 @@ export function DataGrid({
         } else if (event.key === 'Enter') {
           event.preventDefault();
           commitEdit();
-          moveActive(1, 0);
+          moveActive(editing, 1, 0);
         } else if (event.key === 'Tab') {
           event.preventDefault();
           commitEdit();
-          moveActive(0, event.shiftKey ? -1 : 1);
+          stepCell(editing, event.shiftKey ? -1 : 1);
         }
         return;
       }
 
+      // Falls back to the first cell, so the keys work before anything is
+      // clicked rather than letting the browser scroll the grid instead.
+      const current = resolveActive();
+      if (!current) return;
+
       switch (event.key) {
         case 'ArrowDown':
           event.preventDefault();
-          moveActive(1, 0);
+          moveActive(current, 1, 0);
           break;
         case 'ArrowUp':
           event.preventDefault();
-          moveActive(-1, 0);
+          moveActive(current, -1, 0);
           break;
         case 'ArrowLeft':
           event.preventDefault();
-          moveActive(0, -1);
+          moveActive(current, 0, -1);
           break;
         case 'ArrowRight':
           event.preventDefault();
-          moveActive(0, 1);
+          moveActive(current, 0, 1);
+          break;
+        case 'Home':
+          event.preventDefault();
+          moveActive(current, 0, -visibleFields.length);
+          break;
+        case 'End':
+          event.preventDefault();
+          moveActive(current, 0, visibleFields.length);
           break;
         case 'Tab':
           event.preventDefault();
-          moveActive(0, event.shiftKey ? -1 : 1);
+          stepCell(current, event.shiftKey ? -1 : 1);
           break;
         case ' ': {
           // Space toggles the row's checkbox, as it does in most data grids.
           event.preventDefault();
-          const index = recordIndexById.get(active.recordId);
-          if (index !== undefined) toggleRow(active.recordId, index, event.shiftKey);
+          const index = recordIndexById.get(current.recordId);
+          if (index !== undefined) toggleRow(current.recordId, index, event.shiftKey);
           break;
         }
         case 'Enter':
         case 'F2':
           event.preventDefault();
-          beginEdit(active);
+          beginEdit(current);
           break;
         case 'Backspace':
         case 'Delete': {
           event.preventDefault();
-          const field = fieldByKey.get(active.fieldKey);
+          const field = fieldByKey.get(current.fieldKey);
           if (field && !field.readOnly) {
-            onEdit([{ recordId: active.recordId, fieldKey: active.fieldKey, value: '' }]);
+            onEdit([{ recordId: current.recordId, fieldKey: current.fieldKey, value: '' }]);
           }
           break;
         }
@@ -528,18 +619,20 @@ export function DataGrid({
           // A printable character starts editing and becomes the first keystroke.
           if (event.key.length === 1 && !modifier && !event.altKey) {
             event.preventDefault();
-            beginEdit(active, event.key);
+            beginEdit(current, event.key);
           }
       }
     },
     [
-      active,
       beginEdit,
       cancelEdit,
       commitEdit,
       copySelection,
       editing,
       fieldByKey,
+      resolveActive,
+      stepCell,
+      visibleFields,
       moveActive,
       onEdit,
       onSelectionChange,
@@ -580,6 +673,14 @@ export function DataGrid({
         onScroll={handleScroll}
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
+        onFocus={(event) => {
+          // Tabbing in from the toolbar should land on a cell, not leave the
+          // grid focused with nothing selected. Ignore focus bubbling up from
+          // an editor or checkbox inside the grid.
+          if (event.target !== event.currentTarget || active) return;
+          const first = resolveActive();
+          if (first) setActive(first);
+        }}
         onMouseLeave={() => setTooltip(null)}
       >
         <div className="rsu-grid-inner" style={{ width: gridWidth }}>
@@ -727,6 +828,11 @@ export function DataGrid({
                         onMouseLeave={() => setTooltip(null)}
                         onMouseDown={() => {
                           if (isEditing) return;
+                          // Without this the keyboard handler never fires: the
+                          // cell is not focusable, so focus would stay on
+                          // whatever was clicked last (a toolbar button, the
+                          // body) and the arrow keys would scroll the grid.
+                          scrollerRef.current?.focus({ preventScroll: true });
                           setActive(address);
                           if (editing) commitEdit();
                         }}
@@ -786,7 +892,10 @@ export function DataGrid({
             multiple={multiple}
             anchor={picker.rect}
             allowCustom={field.typeOptions.allowCustom ?? false}
-            onClose={() => setPicker(null)}
+            onClose={() => {
+              setPicker(null);
+              refocusGrid();
+            }}
             onChange={(labels) => {
               onEdit([
                 {

@@ -4,7 +4,7 @@
  * actually notice, so they drive the UI rather than the engines underneath.
  */
 
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { SheetUploader } from '../SheetUploader';
@@ -354,6 +354,95 @@ describe('SheetUploader', () => {
 
     // Straight to the header step; no dropzone in sight.
     expect(await screen.findByText('Which row has your column names?')).toBeInTheDocument();
+  });
+
+  describe('grid keyboard navigation', () => {
+    /** The cell the grid currently treats as active. */
+    const activeCell = () =>
+      document.querySelector('.rsu-grid-cell--active')?.getAttribute('data-rsu-cell') ?? null;
+
+    async function openGrid(user: ReturnType<typeof userEvent.setup>) {
+      render(<Harness />);
+      await openToReview(user);
+    }
+
+    it('moves with the arrow keys once a cell is clicked', async () => {
+      const user = userEvent.setup();
+      await openGrid(user);
+
+      await user.click(document.querySelector('[data-rsu-cell$=":firstName"]') as HTMLElement);
+      const start = activeCell();
+
+      await user.keyboard('{ArrowDown}');
+      expect(activeCell()).not.toBe(start);
+      expect(activeCell()).toMatch(/:firstName$/);
+
+      await user.keyboard('{ArrowRight}');
+      expect(activeCell()).toMatch(/:lastName$/);
+
+      await user.keyboard('{ArrowUp}{ArrowLeft}');
+      expect(activeCell()).toBe(start);
+    });
+
+    it('responds to the arrow keys before anything has been clicked', async () => {
+      const user = userEvent.setup();
+      await openGrid(user);
+
+      // Focus the grid without clicking a cell — previously this left the
+      // browser to scroll the container instead of moving the selection.
+      await act(async () => {
+        (document.querySelector('.rsu-grid') as HTMLElement).focus();
+      });
+      await user.keyboard('{ArrowDown}');
+
+      expect(activeCell()).not.toBeNull();
+    });
+
+    it('moves to the next cell on Tab and back on Shift+Tab', async () => {
+      const user = userEvent.setup();
+      await openGrid(user);
+
+      await user.click(document.querySelector('[data-rsu-cell$=":firstName"]') as HTMLElement);
+
+      await user.keyboard('{Tab}');
+      expect(activeCell()).toMatch(/:lastName$/);
+
+      await user.keyboard('{Tab}');
+      expect(activeCell()).toMatch(/:email$/);
+
+      await user.keyboard('{Shift>}{Tab}{/Shift}');
+      expect(activeCell()).toMatch(/:lastName$/);
+    });
+
+    it('wraps to the next row when tabbing off the last column', async () => {
+      const user = userEvent.setup();
+      await openGrid(user);
+
+      // Email is the last column of the first row.
+      const firstRowEmail = document.querySelectorAll('[data-rsu-cell$=":email"]')[0] as HTMLElement;
+      await user.click(firstRowEmail);
+      const firstRowId = activeCell()?.split(':')[0];
+
+      await user.keyboard('{Tab}');
+
+      const wrapped = activeCell();
+      expect(wrapped).toMatch(/:firstName$/);
+      expect(wrapped?.split(':')[0]).not.toBe(firstRowId);
+    });
+
+    it('keeps the keyboard working after an edit is committed', async () => {
+      const user = userEvent.setup();
+      await openGrid(user);
+
+      const cell = document.querySelector('[data-rsu-cell$=":firstName"]') as HTMLElement;
+      await user.dblClick(cell);
+      await user.keyboard('Ada{Enter}');
+
+      // Enter commits and steps down; the grid must still own focus afterwards
+      // or the arrows would scroll it instead of moving.
+      await user.keyboard('{ArrowRight}');
+      expect(activeCell()).toMatch(/:lastName$/);
+    });
   });
 
   it('hands the original file back for archiving', async () => {
