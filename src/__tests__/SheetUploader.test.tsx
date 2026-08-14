@@ -301,6 +301,52 @@ describe('SheetUploader', () => {
     await waitFor(() => expect(onError).toHaveBeenCalled());
   });
 
+  describe('maxRecords', () => {
+    it('rejects a file over an explicit limit', async () => {
+      const user = userEvent.setup();
+      render(
+        <SheetUploader fields={FIELDS} settings={{ importIdentifier: 'Contacts', maxRecords: 1 }}>
+          <button>Import</button>
+        </SheetUploader>,
+      );
+
+      await user.click(screen.getByRole('button', { name: 'Import' }));
+      const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+      await user.upload(input, csvFile());
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('has 2 rows, more than the 1-row limit');
+    });
+
+    // A caller wiring `maxRecords` from an API or config passes `null` for "no
+    // limit"; `rows.length - 1 > null` used to coerce to `> 0` and reject
+    // everything.
+    it.each([
+      ['null', null],
+      ['zero', 0],
+      ['NaN', Number.NaN],
+    ])('treats %s as no limit', async (_label, maxRecords) => {
+      const user = userEvent.setup();
+      render(
+        <SheetUploader
+          fields={FIELDS}
+          settings={{
+            importIdentifier: 'Contacts',
+            maxRecords: maxRecords as unknown as number | undefined,
+          }}
+        >
+          <button>Import</button>
+        </SheetUploader>,
+      );
+
+      await user.click(screen.getByRole('button', { name: 'Import' }));
+      const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+      await user.upload(input, csvFile());
+
+      await screen.findByText('Which row has your column names?');
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+  });
+
   it('starts manual entry with a single blank, error-free row', async () => {
     const user = userEvent.setup();
     render(<Harness />);

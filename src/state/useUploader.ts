@@ -456,8 +456,11 @@ export function useUploader(props: SheetUploaderProps, onClose: () => void) {
         return;
       }
 
+      // Only a finite positive number is a limit. Callers wiring this up from
+      // an API or config routinely pass `null`/`0`/`NaN` for "no limit", and
+      // `rows.length - 1 > null` coerces to `> 0`, rejecting every file.
       const maxRecords = settings.maxRecords;
-      if (maxRecords !== undefined) {
+      if (typeof maxRecords === 'number' && Number.isFinite(maxRecords) && maxRecords > 0) {
         const tooBig = usable.find((sheet) => sheet.rows.length - 1 > maxRecords);
         if (tooBig) {
           reportError(
