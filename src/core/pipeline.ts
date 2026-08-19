@@ -189,8 +189,18 @@ export function applyHookRecord(
   for (const [fieldKey, hookCell] of Object.entries(row)) {
     if (!hookCell) continue;
     const field = fieldsByKey.get(fieldKey);
-    const cell = record.cells[fieldKey];
-    if (!field || !cell) continue;
+    if (!field) continue;
+
+    // A field added part-way through a pass — a step hook's computed column —
+    // has no cell on records that were built before it existed. Give it one
+    // instead of dropping the write, so the hook that fills the column does not
+    // depend on having run after the records were rebuilt.
+    let cell = record.cells[fieldKey];
+    if (!cell) {
+      cell = emptyCell();
+      setCellValue(cell, field, '');
+      record.cells[fieldKey] = cell;
+    }
 
     if (hookCell.value !== undefined && hookCell.value !== cell.value) {
       setCellValue(cell, field, hookCell.value);

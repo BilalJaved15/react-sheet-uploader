@@ -8,7 +8,14 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { SheetUploader } from '../SheetUploader';
-import type { Field, ResultMetadata, ResultRow } from '../types';
+import type {
+  Field,
+  HookRow,
+  ResultMetadata,
+  ResultRow,
+  RowHook,
+  StepHookRegistration,
+} from '../types';
 
 const FIELDS: Field[] = [
   { label: 'First Name', key: 'firstName', validators: [{ validate: 'required' }] },
@@ -539,5 +546,106 @@ describe('SheetUploader', () => {
     await waitFor(() => expect(onResults).toHaveBeenCalled());
     const [, metadata] = onResults.mock.calls[0] as [ResultRow[], ResultMetadata];
     expect(metadata.user).toEqual({ id: 'u1', name: 'Jane' });
+  });
+  /**
+   * A field added by a `REVIEW_STEP` step hook and then filled in by a row hook
+   * on the same pass. This is how a template builds a computed column it does
+   * not want the user to see during matching — the merged-address column on the
+   * companies importer works exactly this way.
+   */
+  describe('a field added by a step hook', () => {
+    const ADDRESS_FIELDS: Field[] = [
+      { label: 'Street', key: 'street' },
+      { label: 'Zip Code', key: 'zipCode' },
+      { label: 'City', key: 'city' },
+    ];
+
+    const ADDRESS_CSV = [
+      'Street,Zip Code,City',
+      '12 Baker St,11001,London',
+      '9 Rue Lafayette,75009,Paris',
+    ].join('\n');
+
+    const COMBINED_KEY = 'cf___combined-address';
+    const MERGED = ['street', 'zipCode', 'city'];
+
+    const stepHooks: StepHookRegistration[] = [
+      {
+        type: 'REVIEW_STEP',
+        callback: (instance) => {
+          instance.addField({ label: 'Full Combined Address', key: COMBINED_KEY });
+        },
+      },
+    ];
+
+    const rowHooks: RowHook[] = [
+      (data, mode) => {
+        const row: HookRow = {};
+        if (mode === 'init' && MERGED.some((key) => data.row[key]?.value)) {
+          row[COMBINED_KEY] = {
+            value: MERGED.map((key) => data.row[key]?.value)
+              .filter(Boolean)
+              .join(' '),
+            info: [{ message: 'combined multiple fields into Address', level: 'info' }],
+          };
+        }
+        return { row };
+      },
+    ];
+
+    function AddressHarness({ onResults }: HarnessProps) {
+      return (
+        <SheetUploader
+          fields={ADDRESS_FIELDS}
+          settings={{ importIdentifier: 'Companies', invalidDataBehavior: 'INCLUDE_INVALID_ROWS' }}
+          stepHooks={stepHooks}
+          rowHooks={rowHooks}
+          onResults={onResults}
+        >
+          <button>Import</button>
+        </SheetUploader>
+      );
+    }
+
+    it('shows the row hook\'s value in the review grid', async () => {
+      const user = userEvent.setup();
+      render(<AddressHarness />);
+
+      await openToReview(user, csvFile(ADDRESS_CSV, 'companies.csv'));
+
+      expect(await screen.findByText('Full Combined Address')).toBeInTheDocument();
+
+      const combined = [
+        ...document.querySelectorAll(`[data-rsu-cell$=":${COMBINED_KEY}"]`),
+      ].map((cell) => cell.textContent);
+      expect(combined).toEqual(['12 Baker St 11001 London', '9 Rue Lafayette 75009 Paris']);
+    });
+
+    it('submits the value the row hook wrote into it', async () => {
+      const user = userEvent.setup();
+      const onResults = vi.fn();
+      render(<AddressHarness onResults={onResults} />);
+
+      await openToReview(user, csvFile(ADDRESS_CSV, 'companies.csv'));
+      await user.click(screen.getByRole('button', { name: 'Submit' }));
+
+      await waitFor(() => expect(onResults).toHaveBeenCalled());
+      const [data] = onResults.mock.calls[0] as [ResultRow[]];
+
+      expect(data).toEqual([
+        {
+          street: '12 Baker St',
+          zipCode: '11001',
+          city: 'London',
+          [COMBINED_KEY]: '12 Baker St 11001 London',
+        },
+        {
+          street: '9 Rue Lafayette',
+          zipCode: '75009',
+          city: 'Paris',
+          [COMBINED_KEY]: '9 Rue Lafayette 75009 Paris',
+        },
+      ]);
+    });
   });
 });

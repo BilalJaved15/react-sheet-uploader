@@ -342,6 +342,10 @@ export function useUploader(props: SheetUploaderProps, onClose: () => void) {
     async (records: InternalRecord[]) => {
       patch({ busy: settings.reviewStep?.processingText ?? 'Preparing your data…' });
       try {
+        // These records are not in state until the end of this function, so
+        // publish them early: a REVIEW_STEP hook calling `addField` seeds its
+        // cells from `stateRef`, and would otherwise seed the previous set.
+        stateRef.current = { ...stateRef.current, records };
         await runStepHooks('REVIEW_STEP', { records: toHookRecords(records, fieldsRef.current) });
         await runPipelineOn(records, 'init');
         await runStepHooks('REVIEW_STEP_POST_HOOKS', {
@@ -809,8 +813,22 @@ export function useUploader(props: SheetUploaderProps, onClose: () => void) {
           else next.splice(Math.max(0, position), 0, field);
           return next;
         });
-        // Existing records need a slot for the new field straight away.
         const normalized = normalizeField(field, true);
+
+        // `setExtraFields` only reaches `fields` on the next render, but hooks
+        // running later in this same tick read `fieldsRef` — a REVIEW_STEP hook
+        // adds a column and the `init` row hooks then fill it, all before React
+        // re-renders. Publish it there too, ordered as the `fields` memo will
+        // order it, so those writes are not dropped as unknown-field writes.
+        if (!fieldsRef.current.some((f) => f.key === field.key)) {
+          const base = fieldsRef.current.filter((f) => !f.isCustom);
+          const extra = fieldsRef.current.filter((f) => f.isCustom);
+          if (position === undefined || position >= extra.length) extra.push(normalized);
+          else extra.splice(Math.max(0, position), 0, normalized);
+          fieldsRef.current = [...base, ...extra];
+        }
+
+        // Existing records need a slot for the new field straight away.
         for (const record of stateRef.current.records) {
           if (record.cells[field.key]) continue;
           const cell = emptyCell();
