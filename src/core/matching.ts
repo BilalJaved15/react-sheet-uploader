@@ -9,6 +9,7 @@
 
 import type { NormalizedField } from './fieldTypes';
 import { normalizeForMatch, similarity } from './similarity';
+import { isStrictlyShapedType, valueTypeScore } from './valueSignals';
 
 export interface SourceColumn {
   /** Position in the uploaded file. */
@@ -26,9 +27,17 @@ export interface ColumnMapping {
   confirmed: boolean;
   /** Similarity that produced an automatic match, if any. */
   score?: number;
+  /** What proposed this mapping. Absent means the local heuristic. */
+  source?: 'ai';
 }
 
 export const DEFAULT_MATCH_THRESHOLD = 0.7;
+
+/**
+ * Below this, a mapping is shown but flagged as low confidence so the user
+ * looks at it rather than skimming past.
+ */
+export const LOW_CONFIDENCE_SCORE = 0.82;
 
 /** Builds the column list from a header row and the data beneath it. */
 export function buildSourceColumns(
@@ -73,6 +82,37 @@ function fuzzyScore(header: string, field: NormalizedField): number {
   return best;
 }
 
+/**
+ * Adjusts a header score by what the column's values look like.
+ *
+ * The value signal is a modifier, not a score of its own: it can lift a header
+ * match that was just short of the threshold, and it can sink one whose values
+ * plainly contradict the field type. It never creates a match on its own, since
+ * value shape identifies a type and many fields share a type.
+ */
+function applyValueSignal(
+  headerScore: number,
+  column: SourceColumn,
+  field: NormalizedField,
+): number {
+  if (headerScore === 0) return 0;
+  if (column.samples.length === 0) return headerScore;
+
+  const fit = valueTypeScore(column.samples, field.typeName, field.selectOptions);
+
+  // Values clearly fit a distinctively-shaped type: close part of the gap to 1.
+  if (fit >= 0.8) return headerScore + (1 - headerScore) * 0.35;
+
+  // Values clearly contradict a distinctively-shaped type: pull the score down
+  // enough that a merely-plausible header cannot carry the match alone. The
+  // penalty is deliberately mild — a value shape this module fails to recognise
+  // is a gap in its patterns, not proof the header is wrong, and an exact alias
+  // hit never reaches here anyway.
+  if (fit <= 0.2 && isStrictlyShapedType(field.typeName)) return headerScore * 0.75;
+
+  return headerScore;
+}
+
 export interface AutoMatchOptions {
   /** Defaults to true. When false, only exact alias matches are made. */
   fuzzyMatchHeaders?: boolean;
@@ -101,7 +141,9 @@ export function autoMatchColumns(
     if (column.header.trim() === '') continue;
     for (const field of matchable) {
       const exact = exactScore(column.header, field);
-      const score = exact === 1 ? 1 : fuzzy ? fuzzyScore(column.header, field) : 0;
+      const headerScore = exact === 1 ? 1 : fuzzy ? fuzzyScore(column.header, field) : 0;
+      // An exact alias hit is already certain; only fuzzy matches are adjusted.
+      const score = exact === 1 ? 1 : applyValueSignal(headerScore, column, field);
       if (score >= threshold) {
         candidates.push({ columnIndex: column.index, fieldKey: field.key, score });
       }

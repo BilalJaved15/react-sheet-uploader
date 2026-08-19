@@ -213,8 +213,10 @@ export function UploaderModal(props: UploaderModalProps) {
             mappings={state.mappings}
             settings={settings.matchingStep ?? {}}
             allowCustomFields={settings.allowCustomFields ?? false}
+            aiMatch={state.aiMatch}
             onChange={actions.setMappings}
             onAddCustomField={actions.addExtraField}
+            onConfirmAll={actions.confirmAllMappings}
           />
         );
 

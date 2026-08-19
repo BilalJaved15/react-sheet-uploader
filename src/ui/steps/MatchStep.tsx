@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import type { NormalizedField } from '../../core/fieldTypes';
-import type { ColumnMapping, SourceColumn } from '../../core/matching';
+import { LOW_CONFIDENCE_SCORE, type ColumnMapping, type SourceColumn } from '../../core/matching';
+import type { AiMatchState } from '../../state/useUploader';
 import type { Field, MatchingStepSettings } from '../../types';
 
 const CUSTOM_VALUE = '__rsu_custom__';
@@ -12,8 +13,10 @@ interface MatchStepProps {
   mappings: ColumnMapping[];
   settings: MatchingStepSettings;
   allowCustomFields: boolean;
+  aiMatch: AiMatchState;
   onChange: (mappings: ColumnMapping[]) => void;
   onAddCustomField: (field: Field) => void;
+  onConfirmAll: () => void;
 }
 
 export function MatchStep({
@@ -22,8 +25,10 @@ export function MatchStep({
   mappings,
   settings,
   allowCustomFields,
+  aiMatch,
   onChange,
   onAddCustomField,
+  onConfirmAll,
 }: MatchStepProps) {
   const mappingByColumn = useMemo(
     () => new Map(mappings.map((mapping) => [mapping.columnIndex, mapping])),
@@ -65,6 +70,13 @@ export function MatchStep({
     );
   };
 
+  /** Mapped but not yet confirmed by the user — the rows needing a look. */
+  const unreviewed = mappings.filter(
+    (mapping) => mapping.fieldKey !== null && !mapping.confirmed,
+  ).length;
+
+  const aiChanged = aiMatch.status === 'done' ? aiMatch.changedColumns.length : 0;
+
   return (
     <>
       {settings.helpText && <div className="rsu-help">{settings.helpText}</div>}
@@ -73,6 +85,25 @@ export function MatchStep({
       <p className="rsu-section-hint">
         We matched what we could. Check the rest, and ignore anything you do not need.
       </p>
+
+      {aiMatch.status === 'running' && (
+        <div className="rsu-match-banner rsu-match-banner--busy" role="status">
+          <span className="rsu-match-banner-text">Checking these matches with AI…</span>
+        </div>
+      )}
+
+      {unreviewed > 0 && aiMatch.status !== 'running' && (
+        <div className="rsu-match-banner" role="status">
+          <span className="rsu-match-banner-text">
+            {aiChanged > 0
+              ? `AI refined ${aiChanged} of ${unreviewed} suggested ${plural(unreviewed, 'match', 'matches')}. Review below.`
+              : `${unreviewed} suggested ${plural(unreviewed, 'match', 'matches')} — review below.`}
+          </span>
+          <button type="button" className="rsu-match-banner-action" onClick={onConfirmAll}>
+            Confirm all
+          </button>
+        </div>
+      )}
 
       <div className="rsu-match-list">
         <div className="rsu-match-head">
@@ -89,7 +120,11 @@ export function MatchStep({
             ? 'ignored'
             : mapping.confirmed
               ? 'manual'
-              : 'auto';
+              : 'suggested';
+
+          const lowConfidence =
+            status === 'suggested' && (mapping?.score ?? 1) < LOW_CONFIDENCE_SCORE;
+          const reason = aiMatch.reasons[column.index];
 
           return (
             <div key={column.index} className="rsu-match-row">
@@ -104,6 +139,11 @@ export function MatchStep({
                 <div className="rsu-match-samples" title={column.samples.join(', ')}>
                   {column.samples.length > 0 ? column.samples.join(', ') : 'No sample data'}
                 </div>
+                {reason && status === 'suggested' && (
+                  <div className="rsu-match-reason" title={reason}>
+                    {reason}
+                  </div>
+                )}
               </div>
 
               <div className="rsu-match-arrow" aria-hidden="true">
@@ -139,8 +179,18 @@ export function MatchStep({
                 )}
               </select>
 
-              <div className={`rsu-match-status rsu-status--${status}`}>
-                {status === 'auto' ? 'Matched' : status === 'manual' ? 'Confirmed' : 'Not imported'}
+              <div
+                className={`rsu-match-status rsu-status--${status}${
+                  lowConfidence ? ' rsu-status--low' : ''
+                }`}
+              >
+                {status === 'suggested'
+                  ? lowConfidence
+                    ? 'Check this'
+                    : 'Suggested'
+                  : status === 'manual'
+                    ? 'Confirmed'
+                    : 'Not imported'}
               </div>
             </div>
           );
@@ -148,6 +198,10 @@ export function MatchStep({
       </div>
     </>
   );
+}
+
+function plural(count: number, one: string, many: string): string {
+  return count === 1 ? one : many;
 }
 
 /** Derives a result key from a label, avoiding collisions with the schema. */

@@ -10,6 +10,8 @@
  * Schema reference: https://developer.dromo.io/reference/fields/fields
  */
 
+import type { AiMatchFn } from './core/aiMatch';
+
 /* -------------------------------------------------------------------------- */
 /* Messages                                                                    */
 /* -------------------------------------------------------------------------- */
@@ -351,6 +353,21 @@ export interface MatchingStepSettings {
   headerRowOverride?: number;
   /** Put "Add custom field" at the top of the dropdown. Defaults to false. */
   suggestCustomFirst?: boolean;
+  /**
+   * Optional AI-assisted matching, run after the built-in heuristic.
+   *
+   * This package makes no model call of its own — it has no API key and no
+   * server, and a key shipped to the browser is a public key. Point this at
+   * your own endpoint, which holds the key and calls whichever provider you
+   * like; `buildMatchPrompt` and `parseMatchResponse` are exported to do the
+   * prompting and parsing for you.
+   *
+   * Suggestions arrive unconfirmed and are shown to the user for review. If
+   * this rejects or exceeds `aiMatchTimeoutMs`, the heuristic result stands.
+   */
+  aiMatch?: AiMatchFn;
+  /** How long to wait for `aiMatch` before falling back. Defaults to 15000. */
+  aiMatchTimeoutMs?: number;
 }
 
 export interface MatchValuesStepSettings {

@@ -123,6 +123,14 @@ export type { NormalizedField, CoercionResult } from './core/fieldTypes';
 export { validateRecords } from './core/validators';
 export { autoMatchColumns, detectHeaderRow, buildSourceColumns } from './core/matching';
 export type { ColumnMapping, SourceColumn } from './core/matching';
+export {
+  buildMatchInput,
+  buildMatchPrompt,
+  parseMatchResponse,
+  applyAiSuggestions,
+} from './core/aiMatch';
+export type { AiMatchFn, AiMatchInput, AiMatchSuggestion } from './core/aiMatch';
+export { valueTypeScore } from './core/valueSignals';
 export { buildRecords, runPipeline } from './core/pipeline';
 export { buildResults, canSubmit } from './core/results';
 export { buildTemplateCsv, downloadTemplate } from './core/template';

@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { normalizeField, type NormalizedField } from '../core/fieldTypes';
+import { applyAiSuggestions, buildMatchInput } from '../core/aiMatch';
 import {
   autoMatchColumns,
   buildSourceColumns,
@@ -61,7 +62,19 @@ export interface UploaderState {
   confirmationMessage: string | null;
   /** True when the user typed their data in rather than uploading a file. */
   manualEntry: boolean;
+  aiMatch: AiMatchState;
 }
+
+export interface AiMatchState {
+  /** `idle` also covers "no aiMatch configured". */
+  status: 'idle' | 'running' | 'done' | 'failed';
+  /** Column indexes the model changed, so the banner can count them. */
+  changedColumns: number[];
+  /** Column index -> the model's stated reason, shown beside the row. */
+  reasons: Record<number, string>;
+}
+
+const IDLE_AI_MATCH: AiMatchState = { status: 'idle', changedColumns: [], reasons: {} };
 
 /**
  * Manual entry starts with a single row. More appear as the user presses Enter
@@ -141,6 +154,7 @@ export function useUploader(props: SheetUploaderProps, onClose: () => void) {
     banner: null,
     confirmationMessage: null,
     manualEntry: false,
+    aiMatch: IDLE_AI_MATCH,
   }));
 
   /** Fields the user or a step hook added on top of the schema. */
@@ -167,6 +181,8 @@ export function useUploader(props: SheetUploaderProps, onClose: () => void) {
   hooksRef.current = { rowHooks, bulkRowHooks, columnHooks };
   const valueMappingsRef = useRef(valueMappings);
   valueMappingsRef.current = valueMappings;
+  /** In-flight AI match, cancelled when the user moves on or re-enters the step. */
+  const aiMatchAbort = useRef<AbortController | null>(null);
 
   const patch = useCallback((changes: Partial<UploaderState>) => {
     setState((prev) => ({ ...prev, ...changes }));
@@ -382,7 +398,11 @@ export function useUploader(props: SheetUploaderProps, onClose: () => void) {
     settings.passThroughUnmappedColumns,
   ]);
 
+  // The suggestion is only useful while the match step is on screen.
+  useEffect(() => () => aiMatchAbort.current?.abort(), []);
+
   const confirmMatch = useCallback(async () => {
+    aiMatchAbort.current?.abort();
     const missing = unmappedRequiredFields(stateRef.current.mappings, fieldsRef.current);
     if (missing.length > 0) {
       setBanner(
@@ -400,6 +420,66 @@ export function useUploader(props: SheetUploaderProps, onClose: () => void) {
     await buildAndReview();
   }, [buildAndReview, patch, setBanner, valueMappingGroups.length]);
 
+  /**
+   * Asks the host's matcher to improve on the heuristic mappings.
+   *
+   * Runs in the background once the match step is already on screen: the user
+   * sees the heuristic result immediately and watches it refine, rather than
+   * waiting on a network round trip before anything appears. Every failure path
+   * — no matcher configured, rejection, timeout, unusable output — leaves the
+   * heuristic mappings exactly as they were.
+   */
+  const runAiMatch = useCallback(
+    async (columns: SourceColumn[], baseMappings: ColumnMapping[]) => {
+      const aiMatch = settings.matchingStep?.aiMatch;
+      if (!aiMatch || columns.length === 0) return;
+
+      aiMatchAbort.current?.abort();
+      const controller = new AbortController();
+      aiMatchAbort.current = controller;
+
+      const timeoutMs = settings.matchingStep?.aiMatchTimeoutMs ?? 15000;
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+      patch({ aiMatch: { status: 'running', changedColumns: [], reasons: {} } });
+
+      try {
+        const input = buildMatchInput(columns, fieldsRef.current, baseMappings);
+        const suggestions = await aiMatch(input, controller.signal);
+        if (controller.signal.aborted) return;
+
+        const applied = applyAiSuggestions(
+          // Re-read state: the user may have edited a row while this was in flight.
+          stateRef.current.mappings,
+          suggestions,
+          fieldsRef.current,
+          columns,
+        );
+
+        patch({
+          mappings: applied.mappings,
+          aiMatch: {
+            status: 'done',
+            changedColumns: applied.changedColumns,
+            reasons: Object.fromEntries(applied.reasons),
+          },
+        });
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        // A failed suggestion is not worth interrupting the user for; the
+        // heuristic mappings on screen are still usable.
+        if (typeof console !== 'undefined') {
+          console.warn('[react-sheet-uploader] aiMatch failed', error);
+        }
+        patch({ aiMatch: { status: 'failed', changedColumns: [], reasons: {} } });
+      } finally {
+        clearTimeout(timer);
+        if (aiMatchAbort.current === controller) aiMatchAbort.current = null;
+      }
+    },
+    [patch, settings.matchingStep?.aiMatch, settings.matchingStep?.aiMatchTimeoutMs],
+  );
+
   const confirmHeader = useCallback(
     (headerRowIndex: number) => {
       const currentRows = activeSheet?.rows ?? [];
@@ -411,9 +491,10 @@ export function useUploader(props: SheetUploaderProps, onClose: () => void) {
         fuzzyMatchHeaders: settings.matchingStep?.fuzzyMatchHeaders ?? true,
       });
 
-      patch({ headerRowIndex, mappings, step: 'match' });
+      patch({ headerRowIndex, mappings, step: 'match', aiMatch: IDLE_AI_MATCH });
+      void runAiMatch(columns, mappings);
     },
-    [activeSheet, patch, settings.matchingStep?.fuzzyMatchHeaders],
+    [activeSheet, patch, runAiMatch, settings.matchingStep?.fuzzyMatchHeaders],
   );
 
   const selectSheet = useCallback(
@@ -431,17 +512,21 @@ export function useUploader(props: SheetUploaderProps, onClose: () => void) {
           sheet.rows[headerIndex] ?? [],
           sheet.rows.slice(headerIndex + 1),
         );
-        patch({
-          mappings: autoMatchColumns(columns, fieldsRef.current, {
-            fuzzyMatchHeaders: settings.matchingStep?.fuzzyMatchHeaders ?? true,
-          }),
-          step: 'match',
+        const mappings = autoMatchColumns(columns, fieldsRef.current, {
+          fuzzyMatchHeaders: settings.matchingStep?.fuzzyMatchHeaders ?? true,
         });
+        patch({ mappings, step: 'match', aiMatch: IDLE_AI_MATCH });
+        void runAiMatch(columns, mappings);
       } else {
         patch({ step: 'header' });
       }
     },
-    [patch, settings.matchingStep?.fuzzyMatchHeaders, settings.matchingStep?.headerRowOverride],
+    [
+      patch,
+      runAiMatch,
+      settings.matchingStep?.fuzzyMatchHeaders,
+      settings.matchingStep?.headerRowOverride,
+    ],
   );
 
   /* ---------------------------------------------------------------------- */
@@ -865,6 +950,11 @@ export function useUploader(props: SheetUploaderProps, onClose: () => void) {
       confirmMatch,
       buildAndReview,
       setMappings: (mappings: ColumnMapping[]) => patch({ mappings }),
+      confirmAllMappings: () =>
+        setState((prev) => ({
+          ...prev,
+          mappings: prev.mappings.map((mapping) => ({ ...mapping, confirmed: true })),
+        })),
       setHeaderRowIndex: (headerRowIndex: number) => patch({ headerRowIndex }),
       editCell,
       applyEdits,

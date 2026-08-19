@@ -12,6 +12,12 @@ import {
   type StepHook,
   type UploaderInstance,
 } from '../src';
+import {
+  AI_DEMO_CSV,
+  REAL_MATCHER_SNIPPET,
+  aiDemoFields,
+  simulatedAiMatch,
+} from './aiMatchDemo';
 import { KITCHEN_SINK_CSV, kitchenSinkFields } from './kitchenSink';
 import '../src/styles.css';
 
@@ -292,6 +298,63 @@ export function App() {
             Download a sample CSV
           </button>
         </div>
+      </div>
+
+      <div className="panel">
+        <h2>AI-assisted column matching</h2>
+        <p>
+          The built-in matcher handles abbreviations (<code>DOB</code> &rarr; Date of Birth),
+          word order, and value shapes — no network, no key. When headers need domain
+          knowledge instead, <code>matchingStep.aiMatch</code> hands the problem to a model
+          you control. Suggestions always arrive unconfirmed for the user to review.
+        </p>
+        <p className="hint">
+          The sample below uses headers like <code>Rev/Mo</code> and <code>Lic Ct</code> that
+          no string metric can reach. This page has nowhere safe to keep an API key, so the
+          matcher here is a canned response on a 1.4s timer — the review flow it drives is
+          the real one.
+        </p>
+        <div className="row">
+          <SheetUploader
+            fields={aiDemoFields}
+            settings={{
+              importIdentifier: 'Accounts',
+              title: 'Import accounts',
+              invalidDataBehavior: 'INCLUDE_INVALID_ROWS',
+              matchingStep: {
+                aiMatch: simulatedAiMatch,
+                helpText: 'Watch the matches refine once the suggestions come back.',
+              },
+            }}
+            onResults={(data, metadata) => setResults({ data, metadata })}
+          >
+            <button className="demo-btn">Import with AI matching</button>
+          </SheetUploader>
+
+          <SheetUploader
+            fields={aiDemoFields}
+            settings={{
+              importIdentifier: 'Accounts',
+              title: 'Import accounts (heuristic only)',
+              invalidDataBehavior: 'INCLUDE_INVALID_ROWS',
+            }}
+            onResults={(data, metadata) => setResults({ data, metadata })}
+          >
+            <button className="demo-btn demo-btn--ghost">Compare without AI</button>
+          </SheetUploader>
+
+          <button
+            className="demo-btn demo-btn--ghost"
+            onClick={() => downloadCsv('messy-accounts.csv', AI_DEMO_CSV)}
+          >
+            Download the messy CSV
+          </button>
+        </div>
+
+        <p className="hint" style={{ marginTop: 14 }}>
+          Wired to a real endpoint it looks like this:
+        </p>
+        <pre>{REAL_MATCHER_SNIPPET}</pre>
       </div>
 
       <div className="panel">

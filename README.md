@@ -39,6 +39,8 @@ import 'react-sheet-uploader/styles.css';
   - [Field types](#field-types)
   - [Validators](#validators)
 - [Settings](#settings)
+- [Column matching](#column-matching)
+  - [AI-assisted matching](#ai-assisted-matching)
 - [Hooks](#hooks)
 - [Results](#results)
 - [Styling](#styling)
@@ -216,12 +218,109 @@ settings={{
   manualInputOnly: false,            // hide the dropzone entirely
 
   uploadStep:      { helpText, sheetOverride, templateDownloadOverrideURL },
-  matchingStep:    { helpText, fuzzyMatchHeaders, headerRowOverride, suggestCustomFirst },
+  matchingStep:    { helpText, fuzzyMatchHeaders, headerRowOverride, suggestCustomFirst,
+                     aiMatch, aiMatchTimeoutMs },   // see "Column matching" below
   matchValuesStep: { helpText, maxMappableSelectValues },
   reviewStep:      { helpText, processingText, allowAddingRows, allowRemovingRows,
                      enableNavigatingErrors, highlightAutoFixes },
 }}
 ```
+
+---
+
+## Column matching
+
+Columns are matched to fields automatically, then shown to the user for review. Nothing is
+ever imported on a guess: a suggested mapping is marked **Suggested** until the user accepts
+it, and the user can accept them all at once with **Confirm all**.
+
+The built-in matcher needs no network, no key, and no configuration. It scores each
+(column, field) pair three ways and takes the strongest:
+
+- **Character bigrams** — catches typos: `Email Adress` → `Email Address`.
+- **Token overlap after expansion** — catches shorthand and word order. An abbreviation
+  table covers the spreadsheet vocabulary that character metrics cannot reach:
+  `DOB` → `Date of Birth`, `Qty` → `Quantity`, `Zip` → `Postal Code`, `Cust Ref` →
+  `customerReference`, `Address Email` → `Email Address`.
+- **Word-boundary containment** — `Customer Email Address` → `Email`.
+
+The score is then adjusted by what the column actually *contains*. A column of `2024-01-05`
+values is pushed away from an `email` field however its header reads, and a column of
+`a@b.com` values is pulled toward one. Assignment is global — every pair is scored and the
+strongest claimed first — so a mediocre early match cannot steal a field that a later column
+matches exactly.
+
+Set `matchingStep.fuzzyMatchHeaders: false` to restrict matching to exact alias hits.
+
+Add `alternateMatches` to a field for any header your own data uses:
+
+```js
+{ label: 'Email', key: 'email', alternateMatches: ['e-mail', 'contact', 'work email'] }
+```
+
+### AI-assisted matching
+
+Some headers need to know what the words *mean*: that `Rev/Mo` is monthly recurring revenue,
+or that `Tier` is your `plan` field. `matchingStep.aiMatch` hands those to a language model.
+
+**This package makes no model call of its own.** It runs in the browser, and every provider
+with a free tier still requires an API key — a key shipped to the browser is a public key. So
+`aiMatch` is a function *you* implement, normally a `fetch` to your own endpoint, which holds
+the key and calls whichever provider you like. The prompt builder and response parser are
+exported, so the integration is short:
+
+```jsx
+// Your app.
+<SheetUploader
+  fields={fields}
+  settings={{
+    matchingStep: {
+      aiMatch: async (input, signal) => {
+        const res = await fetch('/api/match-columns', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(input),
+          signal,
+        });
+        return res.json();
+      },
+      aiMatchTimeoutMs: 15000, // default
+    },
+  }}
+/>
+```
+
+```js
+// Your server. Any provider, any model — this is an easy task, so the
+// cheapest tier is the right choice.
+import { buildMatchPrompt, parseMatchResponse } from 'react-sheet-uploader';
+
+app.post('/api/match-columns', async (req, res) => {
+  const completion = await yourModel.generate(buildMatchPrompt(req.body));
+  res.json(parseMatchResponse(completion));
+});
+```
+
+`input` carries the column headers, a few sample values from each, and the schema — enough for
+the model to work with, and no more of the user's data than it needs. Long sample values are
+truncated and hidden fields are omitted before anything leaves the browser.
+
+How the result is treated:
+
+- **Nothing is trusted.** A suggestion naming an unknown field, pointing at a column that does
+  not exist, or double-claiming a single-use field is dropped. Below `confidence: 0.5` it is
+  dropped too — a blank the user fills in beats a wrong guess they have to notice.
+- **Nothing is load-bearing.** A rejection, a timeout, or unparseable output leaves the
+  heuristic mappings exactly as they were. The step is usable either way.
+- **Nothing is silent.** Suggestions arrive unconfirmed, behind a banner saying how many
+  changed. Low-confidence rows are flagged **Check this**, with the model's stated reason
+  beside them. A mapping the user already changed is never overwritten.
+- **Nothing blocks.** The heuristic result renders immediately and refines when the response
+  lands; the request is aborted if the user moves on first.
+
+If you would rather write the prompt yourself, `aiMatch` only has to return
+`{ columnIndex, fieldKey, confidence?, reason? }[]` — `buildMatchPrompt` and
+`parseMatchResponse` are a convenience, not a requirement.
 
 ---
 
@@ -402,7 +501,7 @@ This is also how to add legacy `.xls`, by delegating to a reader of your choice.
 1. **Upload** — drop a file, or start an empty grid by hand.
 2. **Sheet** — only when a workbook has more than one sheet.
 3. **Header row** — skipped when `matchingStep.headerRowOverride` is set.
-4. **Match columns** — auto-matched, user-confirmable.
+4. **Match columns** — auto-matched, user-confirmable; optionally AI-assisted.
 5. **Match values** — only when `select` values in the file match no option.
 6. **Review** — edit, fix, and submit.
 
