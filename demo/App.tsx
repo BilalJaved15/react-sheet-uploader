@@ -18,6 +18,7 @@ import {
   aiDemoFields,
   simulatedAiMatch,
 } from './aiMatchDemo';
+import { DATE_LAB_CSV, DATE_LAB_ROWS, dateLabFields } from './dateLab';
 import { KITCHEN_SINK_CSV, kitchenSinkFields } from './kitchenSink';
 import '../src/styles.css';
 
@@ -462,6 +463,52 @@ export function App() {
           <button
             className="demo-btn demo-btn--ghost"
             onClick={() => downloadCsv('kitchen-sink.csv', KITCHEN_SINK_CSV)}
+          >
+            Download its sample CSV
+          </button>
+        </div>
+      </div>
+
+      <div className="panel">
+        <h2>Date, datetime and time</h2>
+        <p>
+          One column per parsing or validation rule, one row per case. The <code>Case</code>{' '}
+          column says what each row is probing, so the review grid reads as a test report —
+          turn on <code>highlightAutoFixes</code> and every cell the parser rewrote is marked.
+        </p>
+        <p className="hint">
+          Covers month-first vs <code>dayFirst</code>, custom display and output formats,{' '}
+          <code>withSeconds</code>, impossible dates, Excel serials, and the{' '}
+          <code>required</code>, <code>unique</code>, <code>require_with</code> and{' '}
+          <code>regex_match</code> validators on date fields. All 8 failures are deliberate:{' '}
+          <em>Impossible calendar date</em>, <em>Excel serial number</em> and{' '}
+          <em>Compact and free text</em> cannot be parsed at all; <em>Two-digit year</em>,{' '}
+          <em>Blank required cell</em> and <em>Start with no end</em> each trip one validator;
+          and <em>Repeated unique value</em> flags <em>Canonical ISO</em> along with itself.
+        </p>
+        <div className="row">
+          <SheetUploader
+            fields={dateLabFields}
+            settings={{
+              importIdentifier: 'Dates',
+              title: 'Date field tester',
+              invalidDataBehavior: 'INCLUDE_INVALID_ROWS',
+              templateDownloadFilename: 'date-lab-template.csv',
+              // Straight to matching with the cases already loaded, so checking
+              // a parsing change is one click rather than a file round-trip.
+              // The rows carry their own header, so there is nothing to pick.
+              initialData: DATE_LAB_ROWS,
+              matchingStep: { headerRowOverride: 0 },
+              reviewStep: { enableNavigatingErrors: true, highlightAutoFixes: true },
+            }}
+            onResults={(data, metadata) => setResults({ data, metadata })}
+          >
+            <button className="demo-btn">Open the date tester</button>
+          </SheetUploader>
+
+          <button
+            className="demo-btn demo-btn--ghost"
+            onClick={() => downloadCsv('date-lab.csv', DATE_LAB_CSV)}
           >
             Download its sample CSV
           </button>
