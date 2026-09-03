@@ -14,6 +14,7 @@ import {
   ISO_TIME_FORMAT,
   ISO_TIME_WITH_SECONDS,
   formatDateValue,
+  localeIsDayFirst,
   parseDateValue,
   type WallClock,
 } from './datetime';
@@ -183,7 +184,10 @@ function coerceDateLike(
   typeName: 'date' | 'datetime' | 'time',
   options: AnyFieldTypeOptions,
 ): CoercionResult {
-  const clock = parseDateValue(raw, { dayFirst: options.dayFirst });
+  // An explicit `dayFirst` wins; otherwise a declared `locale` decides the
+  // reading of ambiguous numeric dates like `05.01.2024`.
+  const dayFirst = options.dayFirst ?? localeIsDayFirst(options.locale);
+  const clock = parseDateValue(raw, { dayFirst });
   if (clock === null) {
     const label = typeName === 'time' ? 'time' : typeName === 'date' ? 'date' : 'date and time';
     return fail(raw, `Not a valid ${label}`);

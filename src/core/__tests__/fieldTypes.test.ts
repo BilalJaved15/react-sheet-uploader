@@ -84,6 +84,27 @@ describe('coerceValue', () => {
       expect(coerceValue(input, date).output).toBe(expected);
     });
 
+    it('reads ambiguous dates day-first for a day-first locale', () => {
+      const de = field({ key: 'd', type: ['date', { locale: 'de-DE' }] });
+      expect(coerceValue('05.01.2024', de).output).toBe('2024-01-05');
+      expect(coerceValue('05/01/2024', de).output).toBe('2024-01-05');
+    });
+
+    it('reads ambiguous dates month-first for a month-first locale', () => {
+      const us = field({ key: 'd', type: ['date', { locale: 'en-US' }] });
+      expect(coerceValue('05/01/2024', us).output).toBe('2024-05-01');
+    });
+
+    it('lets an explicit dayFirst win over the locale', () => {
+      const mixed = field({ key: 'd', type: ['date', { locale: 'de-DE', dayFirst: false }] });
+      expect(coerceValue('05/01/2024', mixed).output).toBe('2024-05-01');
+    });
+
+    it('ignores an unusable locale tag', () => {
+      const bogus = field({ key: 'd', type: ['date', { locale: 'not-a-locale!' }] });
+      expect(coerceValue('05/01/2024', bogus).output).toBe('2024-05-01');
+    });
+
     it('respects dayFirst for ambiguous dates', () => {
       const dayFirst = field({ key: 'd', type: ['date', { dayFirst: true }] });
       expect(coerceValue('01/05/2024', dayFirst).output).toBe('2024-05-01');

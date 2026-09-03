@@ -303,6 +303,66 @@ describe('runPipeline', () => {
     expect(records[0]?.cells.joined?.output).toBe('2024-01-05');
   });
 
+  it('shows hooks the coerced value as resultValue', async () => {
+    const fields: Field[] = [{ label: 'Joined', key: 'joined', type: 'date' }];
+    const { normalized, records } = makeRecords(fields, [['Jan 5, 2024']], ['joined']);
+    const seen: unknown[] = [];
+
+    await runPipeline(
+      records,
+      normalized,
+      {
+        rowHooks: [
+          (record) => {
+            seen.push(record.row.joined!.resultValue);
+            return record;
+          },
+        ],
+      },
+      { mode: 'init' },
+    );
+
+    expect(seen).toEqual(['2024-01-05']);
+  });
+
+  it('does not pin a cell when a hook echoes the resultValue it was given', async () => {
+    const fields: Field[] = [{ label: 'Joined', key: 'joined', type: 'date' }];
+    const { normalized, records } = makeRecords(fields, [['Jan 5, 2024']], ['joined']);
+
+    // The hook rewrites the value without touching resultValue, exactly as a
+    // record it merely read and handed back would.
+    await runPipeline(
+      records,
+      normalized,
+      { rowHooks: [(record) => { record.row.joined!.value = 'Mar 4, 2025'; return record; }] },
+      { mode: 'init' },
+    );
+
+    expect(records[0]?.cells.joined?.resultValue).toBeUndefined();
+    expect(buildResults(records, {
+      fields: normalized,
+      mappings: [],
+      rawHeaders: [],
+      filename: null,
+      invalidDataBehavior: 'INCLUDE_INVALID_ROWS',
+    }).data[0]?.joined).toBe('2025-03-04');
+  });
+
+  it('still lets a hook override the result value', async () => {
+    const fields: Field[] = [{ label: 'Joined', key: 'joined', type: 'date' }];
+    const { normalized, records } = makeRecords(fields, [['Jan 5, 2024']], ['joined']);
+
+    await runPipeline(
+      records,
+      normalized,
+      { rowHooks: [(record) => { record.row.joined!.resultValue = 1704412800000; return record; }] },
+      { mode: 'init' },
+    );
+
+    expect(records[0]?.cells.joined?.value).toBe('2024-01-05');
+    expect(records[0]?.cells.joined?.resultValue).toBe(1704412800000);
+  });
+
   it('keeps hook info messages through validation', async () => {
     const { normalized, records } = makeRecords(
       FIELDS,

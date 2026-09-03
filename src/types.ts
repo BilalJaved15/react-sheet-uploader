@@ -90,6 +90,7 @@ export interface NumberTypeOptions {
 }
 
 export interface DateTypeOptions {
+  /** Decides the reading of ambiguous numeric dates, unless `dayFirst` is set. */
   locale?: string;
   displayFormat?: string;
   outputFormat?: string;
@@ -569,7 +570,11 @@ export type HookMode = 'init' | 'update';
 export interface HookCell {
   /** The displayed value. Assign to it to change the cell. */
   value: string;
-  /** Overrides what lands in the results without changing what the user sees. */
+  /**
+   * The coerced value behind `value` — an ISO date for a `date` field, a number
+   * for a `number` field. Assign to it to override what lands in the results
+   * without changing what the user sees.
+   */
   resultValue?: unknown;
   /** Messages attached to this cell. Replacing the array replaces the messages. */
   info?: InfoMessage[];

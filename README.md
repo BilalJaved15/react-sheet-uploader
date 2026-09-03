@@ -357,8 +357,9 @@ record.row.email.info = [{ message: 'Already registered', level: 'error' }];
 ```
 
 Assigning to `value` re-runs coercion and validation, so writing `'Jan 5, 2024'` into a `date`
-field still yields `2024-01-05`. Set `resultValue` to change the output without changing what the
-user sees.
+field still yields `2024-01-05`. Read `resultValue` to get that coerced value — the ISO date behind
+whatever the grid displays — and assign to it to change the output without changing what the user
+sees.
 
 **Bulk row hooks** get the whole table in one call — the right place for a single API round-trip:
 

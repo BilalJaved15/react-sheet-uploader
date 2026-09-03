@@ -163,8 +163,15 @@ export function toHookRecords(records: InternalRecord[], fields: NormalizedField
     for (const field of fields) {
       const cell = record.cells[field.key];
       if (!cell) continue;
-      const hookCell: HookCell = { value: cell.value, info: cell.info.slice() };
-      if (cell.resultValue !== undefined) hookCell.resultValue = cell.resultValue;
+      // Hooks read `resultValue` to see the coerced value behind the displayed
+      // text, so it is seeded from the cell's output rather than left undefined
+      // until a hook writes one. `applyHookRecord` treats an unchanged echo as
+      // the read it is, so seeding here does not pin the cell.
+      const hookCell: HookCell = {
+        value: cell.value,
+        resultValue: cell.resultValue ?? cell.output,
+        info: cell.info.slice(),
+      };
       if (cell.selectOptions) hookCell.selectOptions = cell.selectOptions;
       row[field.key] = hookCell;
     }
@@ -202,19 +209,41 @@ export function applyHookRecord(
       record.cells[fieldKey] = cell;
     }
 
+    // What `toHookRecords` handed the hook, captured before a `value` write
+    // re-coerces the cell and moves `output` underneath us.
+    const seededResultValue = cell.resultValue ?? cell.output;
+
     if (hookCell.value !== undefined && hookCell.value !== cell.value) {
       setCellValue(cell, field, hookCell.value);
     }
     if (hookCell.info !== undefined) {
       cell.info = normalizeMessages(hookCell.info);
     }
-    if (hookCell.resultValue !== undefined) {
+    // Only a hook that actually changed `resultValue` is overriding the result;
+    // handing back the seeded value is a read, and pinning the cell on that
+    // would freeze it against later re-coercion.
+    if (
+      hookCell.resultValue !== undefined &&
+      !sameResultValue(hookCell.resultValue, seededResultValue)
+    ) {
       cell.resultValue = hookCell.resultValue;
     }
     if (hookCell.selectOptions !== undefined) {
       cell.selectOptions = hookCell.selectOptions;
     }
   }
+}
+
+/**
+ * Whether a hook handed back the `resultValue` it was given.
+ *
+ * `manyToOne` outputs are arrays, which a hook that clones its record returns
+ * as an equal-but-distinct array, so those are compared element-wise.
+ */
+function sameResultValue(returned: unknown, seeded: unknown): boolean {
+  if (returned === seeded) return true;
+  if (!Array.isArray(returned) || !Array.isArray(seeded)) return false;
+  return returned.length === seeded.length && returned.every((item, i) => item === seeded[i]);
 }
 
 function normalizeMessages(messages: InfoMessage[]): InfoMessage[] {

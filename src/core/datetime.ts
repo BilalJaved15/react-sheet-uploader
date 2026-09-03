@@ -193,6 +193,40 @@ function parseTimeInto(clock: WallClock, raw: string): boolean {
   return true;
 }
 
+const DAY_FIRST_BY_LOCALE = new Map<string, boolean>();
+
+/**
+ * Whether a locale writes the day before the month.
+ *
+ * Field configs ported from other importers describe a column as
+ * `['date', { locale: 'de-DE' }]` rather than setting `dayFirst`, and a German
+ * `05.01.2024` means 5 January, not 1 May. The order is read off `Intl` rather
+ * than a hand-kept list so every locale the platform knows about is covered.
+ *
+ * Returns `undefined` for an unknown tag or a locale whose format exposes no
+ * day/month parts, leaving `parseDateValue`'s own ambiguity handling in charge.
+ */
+export function localeIsDayFirst(locale: string | undefined): boolean | undefined {
+  if (!locale) return undefined;
+
+  const cached = DAY_FIRST_BY_LOCALE.get(locale);
+  if (cached !== undefined) return cached;
+
+  let dayFirst: boolean | undefined;
+  try {
+    // A day that cannot be read as a month, so the two parts stay tellable apart.
+    const parts = new Intl.DateTimeFormat(locale).formatToParts(new Date(2000, 0, 22));
+    const dayIndex = parts.findIndex((part) => part.type === 'day');
+    const monthIndex = parts.findIndex((part) => part.type === 'month');
+    dayFirst = dayIndex !== -1 && monthIndex !== -1 ? dayIndex < monthIndex : undefined;
+  } catch {
+    dayFirst = undefined;
+  }
+
+  if (dayFirst !== undefined) DAY_FIRST_BY_LOCALE.set(locale, dayFirst);
+  return dayFirst;
+}
+
 /**
  * Parses a value into a wall clock, or returns null when it is not a date.
  * Accepts ISO-8601, common numeric orders, textual months, Excel serials,
