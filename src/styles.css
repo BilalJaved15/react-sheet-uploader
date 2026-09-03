@@ -1258,6 +1258,12 @@
   text-overflow: ellipsis;
 }
 
+/* Stands in for a line break the fixed row height cannot show. */
+.rsu-grid-cell-break {
+  padding: 0 3px;
+  color: var(--rsu-text-faint);
+}
+
 .rsu-grid-cell--readonly {
   color: var(--rsu-text-muted);
   background: var(--rsu-surface-sunken);
@@ -1308,6 +1314,20 @@
   outline-color: var(--rsu-error);
 }
 
+/* An open editor is taller than its row whenever the value holds line breaks,
+   and it overhangs the rows below — so the cell must stop clipping and paint
+   above them. Kept under the sticky header's z-index of 3. */
+.rsu-grid-cell--editing {
+  z-index: 2;
+  overflow: visible;
+}
+
+/* The editor carries the ring while it is open; the cell's own would draw a
+   second one cropped to the row height. */
+.rsu-grid-cell--editing.rsu-grid-cell--active {
+  outline: none;
+}
+
 /* Select cells advertise themselves: the caret is always visible, and a single
    click opens the dropdown. */
 .rsu-grid-cell--picker {
@@ -1325,22 +1345,42 @@
   color: var(--rsu-text-muted);
 }
 
+/* Absolute rather than in flow: a value with line breaks makes the editor
+   taller than its row, and it has to overhang the rows below instead of
+   stretching one. The 8px/10px padding keeps the text on the same baseline and
+   left edge as the cell's own 0 10px. */
 .rsu-grid-editor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 3;
+  box-sizing: border-box;
   width: 100%;
-  height: 100%;
-  padding: 0;
+  min-height: 100%;
+  padding: 8px 10px;
+  overflow: hidden;
   font: inherit;
   font-size: 13px;
+  line-height: 18px;
   color: var(--rsu-text);
-  background: transparent;
+  resize: none;
+  background: var(--rsu-surface);
   border: 0;
 }
 
-/* The cell's own active ring is the focus indicator. Without this the global
-   :focus-visible rule adds a second, offset outline around the input. */
+/* The ring belongs to the editor rather than the cell so that it encloses the
+   whole box once line breaks have grown it past its row. Declared for the focus
+   states too, so the global :focus-visible rule cannot replace it with its own
+   offset outline. */
+.rsu-grid-editor,
 .rsu-grid-editor:focus,
 .rsu-grid-editor:focus-visible {
-  outline: none;
+  outline: 2px solid var(--rsu-grid-selection-border);
+  outline-offset: -2px;
+}
+
+.rsu-grid-cell--error .rsu-grid-editor {
+  outline-color: var(--rsu-error);
 }
 
 .rsu-grid-empty {

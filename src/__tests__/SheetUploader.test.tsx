@@ -266,6 +266,55 @@ describe('SheetUploader', () => {
     expect(data[0]?.firstName).toBe('Augusta');
   });
 
+  it('takes a line break in a cell without committing the edit', async () => {
+    const user = userEvent.setup();
+    const onResults = vi.fn();
+    render(<Harness onResults={onResults} />);
+
+    await openToReview(user);
+
+    const cell = document.querySelector('[data-rsu-cell$=":lastName"]') as HTMLElement;
+    await user.dblClick(cell);
+    const editor = document.querySelector('.rsu-grid-editor') as HTMLTextAreaElement;
+    await user.clear(editor);
+
+    // Each of these is a line-break gesture in some spreadsheet, and none of
+    // them may close the editor.
+    await user.type(editor, 'Ada{Shift>}{Enter}{/Shift}Lovelace');
+    await user.type(editor, '{Alt>}{Enter}{/Alt}Countess');
+    await user.type(editor, '{Control>}{Enter}{/Control}Byron{Enter}');
+
+    expect(document.querySelector('.rsu-grid-editor')).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Submit' }));
+    await waitFor(() => expect(onResults).toHaveBeenCalled());
+
+    const [data] = onResults.mock.calls[0] as [ResultRow[]];
+    expect(data[0]?.lastName).toBe('Ada\nLovelace\nCountess\nByron');
+  });
+
+  it('pastes a quoted multi-line cell as one cell rather than several rows', async () => {
+    const user = userEvent.setup();
+    const onResults = vi.fn();
+    render(<Harness onResults={onResults} />);
+
+    await openToReview(user);
+
+    const cell = document.querySelector('[data-rsu-cell$=":lastName"]') as HTMLElement;
+    await user.click(cell);
+
+    // What Excel and Sheets put on the clipboard for a cell holding a break.
+    await user.paste('"Lovelace\nByron"');
+
+    await user.click(screen.getByRole('button', { name: 'Submit' }));
+    await waitFor(() => expect(onResults).toHaveBeenCalled());
+
+    const [data] = onResults.mock.calls[0] as [ResultRow[]];
+    expect(data).toHaveLength(2);
+    expect(data[0]?.lastName).toBe('Lovelace\nByron');
+    expect(data[1]?.lastName).toBe('Turing');
+  });
+
   it('confirms before deleting a row', async () => {
     const user = userEvent.setup();
     const onResults = vi.fn();

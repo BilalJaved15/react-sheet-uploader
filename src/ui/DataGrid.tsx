@@ -6,7 +6,7 @@
  * are fixed constants so a row's position is arithmetic rather than measurement.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { NormalizedField } from '../core/fieldTypes';
 import { cellMessages, cellSeverity, type InternalRecord } from '../core/model';
 import type { InfoMessage } from '../types';
@@ -63,13 +63,80 @@ interface TooltipState {
   messages: InfoMessage[];
 }
 
-/** Splits pasted clipboard text into a grid. Excel and Sheets both emit TSV. */
+/**
+ * Splits pasted clipboard text into a grid. Excel and Sheets both emit TSV,
+ * quoting any field that holds a delimiter, a quote or a line break, so quoted
+ * runs are honoured here: splitting on every newline would turn one cell that
+ * contains a break into two rows carrying stray quote characters.
+ */
 function parseClipboardGrid(text: string): string[][] {
   const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  const trimmed = normalized.endsWith('\n') ? normalized.slice(0, -1) : normalized;
-  if (trimmed === '') return [];
-  const delimiter = trimmed.includes('\t') ? '\t' : ',';
-  return trimmed.split('\n').map((line) => line.split(delimiter));
+  if (normalized === '') return [];
+  const delimiter = normalized.includes('\t') ? '\t' : ',';
+
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let quoted = false;
+
+  for (let i = 0; i < normalized.length; i += 1) {
+    const char = normalized[i];
+
+    if (quoted) {
+      if (char !== '"') {
+        field += char;
+      } else if (normalized[i + 1] === '"') {
+        // A doubled quote inside a quoted field is one literal quote.
+        field += '"';
+        i += 1;
+      } else {
+        quoted = false;
+      }
+      continue;
+    }
+
+    // Only a quote that opens the field quotes it; one in the middle of bare
+    // text is data, as in `5" pipe`.
+    if (char === '"' && field === '') {
+      quoted = true;
+    } else if (char === delimiter) {
+      row.push(field);
+      field = '';
+    } else if (char === '\n') {
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = '';
+    } else {
+      field += char;
+    }
+  }
+
+  row.push(field);
+  rows.push(row);
+
+  // A trailing newline closes the last row rather than opening an empty one.
+  const last = rows[rows.length - 1];
+  if (rows.length > 1 && last && last.length === 1 && last[0] === '') rows.pop();
+
+  return rows;
+}
+
+/**
+ * Renders a cell's text on the grid's single line.
+ *
+ * A line break in the value would otherwise collapse into a space and read as
+ * one continuous string, so it is drawn as a return marker instead: rows are a
+ * fixed height, so the following line cannot be shown in place.
+ */
+function renderCellText(value: string): React.ReactNode {
+  if (!/[\n\r]/.test(value)) return value;
+  return value.split(/\r\n|[\n\r]/).map((line, index) => (
+    <Fragment key={index}>
+      {index > 0 && <span className="rsu-grid-cell-break">↵</span>}
+      {line}
+    </Fragment>
+  ));
 }
 
 /** Quotes a value for the TSV placed on the clipboard. */
@@ -549,6 +616,9 @@ export function DataGrid({
           event.preventDefault();
           cancelEdit();
         } else if (event.key === 'Enter') {
+          // A modified Enter inserts a line break instead of committing, and
+          // `CellEditor` stops that keystroke before it reaches here — so an
+          // Enter that arrives is the bare one that closes the cell.
           event.preventDefault();
           commitEdit();
           moveActive(editing, 1, 0);
@@ -807,6 +877,7 @@ export function DataGrid({
                       'rsu-grid-cell',
                       severity ? `rsu-grid-cell--${severity}` : '',
                       isActive ? 'rsu-grid-cell--active' : '',
+                      isEditing ? 'rsu-grid-cell--editing' : '',
                       field.readOnly ? 'rsu-grid-cell--readonly' : '',
                       isPicker ? 'rsu-grid-cell--picker' : '',
                       highlightAutoFixes && cell.autofixed ? 'rsu-grid-cell--autofixed' : '',
@@ -852,7 +923,9 @@ export function DataGrid({
                           />
                         ) : (
                           <>
-                            <span className="rsu-grid-cell-text">{cell.value}</span>
+                            <span className="rsu-grid-cell-text">
+                              {renderCellText(cell.value)}
+                            </span>
                             {isPicker && (
                               <ChevronDownIcon size={13} className="rsu-grid-cell-caret" />
                             )}
@@ -941,22 +1014,67 @@ interface CellEditorProps {
  * edited through `SelectPopover`, which opens on a single click.
  */
 function CellEditor({ field, value, onChange, onCommit }: CellEditorProps) {
-  const inputRef = useRef<HTMLInputElement | null>(null);
+  // A textarea rather than an input: a cell may legitimately hold a line break
+  // (an address, a note), and an input silently drops one.
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  /** Where to put the caret once a programmatic edit has been rendered. */
+  const pendingCaret = useRef<number | null>(null);
 
   useEffect(() => {
     inputRef.current?.focus();
     inputRef.current?.select();
   }, []);
 
+  useLayoutEffect(() => {
+    const node = inputRef.current;
+    if (!node) return;
+
+    // Rows are a fixed height, so a multi-line value cannot be shown in place.
+    // The editor instead grows downward over the rows beneath it, which is what
+    // makes the second line reachable at all.
+    node.style.height = 'auto';
+    node.style.height = `${Math.max(node.scrollHeight, ROW_HEIGHT)}px`;
+
+    // Re-rendering a controlled textarea leaves the caret at the end of the
+    // text, so an inserted break has to put it back. This has to happen in a
+    // layout effect: deferred to a frame, the next keystroke lands first and
+    // the restore then drops the caret behind it, scrambling the typing.
+    if (pendingCaret.current !== null) {
+      node.setSelectionRange(pendingCaret.current, pendingCaret.current);
+      pendingCaret.current = null;
+    }
+  }, [value]);
+
+  const insertBreak = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Excel uses Alt+Enter, Sheets uses Ctrl+Enter and Shift+Enter is the web
+    // convention, so all of them insert a break. Note that Ctrl/Cmd+Enter puts
+    // no character in a textarea on its own, hence the manual splice.
+    event.preventDefault();
+    // The grid's key handler treats any Enter as "commit and move down"; this
+    // keystroke must not reach it.
+    event.stopPropagation();
+
+    const node = event.currentTarget;
+    const start = node.selectionStart ?? node.value.length;
+    const end = node.selectionEnd ?? start;
+    pendingCaret.current = start + 1;
+    onChange(`${node.value.slice(0, start)}\n${node.value.slice(end)}`);
+  };
+
   return (
-    <input
+    <textarea
       ref={inputRef}
       className="rsu-grid-editor"
+      rows={1}
       // A number field still takes text: the coercion layer accepts "$1,234.56",
       // which a native number input would refuse to hold.
       inputMode={field.typeName === 'number' ? 'decimal' : undefined}
       value={value}
       onChange={(event) => onChange(event.target.value)}
+      onKeyDown={(event) => {
+        if (event.key !== 'Enter') return;
+        if (event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) insertBreak(event);
+      }}
       onBlur={onCommit}
     />
   );

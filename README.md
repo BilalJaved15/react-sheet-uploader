@@ -508,8 +508,9 @@ This is also how to add legacy `.xls`, by delegating to a reader of your choice.
 
 In the review grid: click a cell to select it and type to edit; click a row number to select the
 whole row; `Cmd/Ctrl+C` and `Cmd/Ctrl+V` copy and paste rows to and from Excel; arrows, `Tab` and
-`Enter` navigate, and `Enter` on the last row adds another. Select-type cells open a dropdown on a
-single click. Column headers show an error count that filters the grid to that column's problems.
+`Enter` navigate, and `Enter` on the last row adds another. `Shift+Enter`, `Alt+Enter` or
+`Cmd/Ctrl+Enter` puts a line break inside a cell — the grid shows it as a `↵` marker, since rows are
+a fixed height. Select-type cells open a dropdown on a single click. Column headers show an error count that filters the grid to that column's problems.
 
 ---
 
