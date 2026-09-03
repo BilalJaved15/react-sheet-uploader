@@ -1325,22 +1325,49 @@
   color: var(--rsu-text-muted);
 }
 
-.rsu-grid-editor {
-  width: 100%;
-  height: 100%;
-  padding: 0;
-  font: inherit;
-  font-size: 13px;
-  color: var(--rsu-text);
-  background: transparent;
-  border: 0;
+/* The cell clips its contents and is only one row tall, either of which would
+   cut the editor off the moment a value grows past one line. The ring moves to
+   the editor with it, so it frames what is actually being edited. */
+.rsu-grid-cell--editing {
+  z-index: 3;
+  overflow: visible;
+  outline: none;
 }
 
-/* The cell's own active ring is the focus indicator. Without this the global
-   :focus-visible rule adds a second, offset outline around the input. */
+.rsu-grid-editor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  box-sizing: border-box;
+  width: 100%;
+  /* Matches ROW_HEIGHT exactly at one line (20 + 7 + 7), so opening the editor
+     does not shift the text it replaced. */
+  min-height: 34px;
+  padding: 7px 10px;
+  overflow-y: auto;
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--rsu-text);
+  resize: none;
+  background: var(--rsu-surface);
+  border: 0;
+  /* Opaque and lifted: once it grows it covers the rows underneath. */
+  box-shadow: 0 2px 8px rgb(0 0 0 / 18%);
+}
+
+/* Stated for every state, so the global :focus-visible rule cannot replace it
+   with a second, offset outline. */
+.rsu-grid-editor,
 .rsu-grid-editor:focus,
 .rsu-grid-editor:focus-visible {
-  outline: none;
+  outline: 2px solid var(--rsu-grid-selection-border);
+  outline-offset: -2px;
+}
+
+.rsu-grid-cell--error .rsu-grid-editor {
+  outline-color: var(--rsu-error);
 }
 
 .rsu-grid-empty {

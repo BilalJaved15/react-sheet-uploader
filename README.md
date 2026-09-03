@@ -62,7 +62,8 @@ import 'react-sheet-uploader/styles.css';
 - **A full validator set**, including cross-row `unique` and composite `unique_with`.
 - **Hooks** — row, bulk row, column, step, row-delete and `beforeFinish`, all async-aware.
 - **An editable, virtualised review grid** — 50k rows scroll smoothly; keyboard navigation, row
-  selection, copy/paste to and from Excel, per-column error filters, and an error navigator.
+  selection, copy/paste to and from Excel, multi-line cells, per-column error filters, and an error
+navigator.
 - **Manual entry** — start from an empty grid instead of a file.
 - **Theming** via `styleOverrides`, driven entirely by CSS custom properties.
 
@@ -507,7 +508,8 @@ This is also how to add legacy `.xls`, by delegating to a reader of your choice.
 
 In the review grid: click a cell to select it and type to edit; click a row number to select the
 whole row; `Cmd/Ctrl+C` and `Cmd/Ctrl+V` copy and paste rows to and from Excel; arrows, `Tab` and
-`Enter` navigate, and `Enter` on the last row adds another. Select-type cells open a dropdown on a
+`Enter` navigate, and `Enter` on the last row adds another. `Alt+Enter` or `Shift+Enter` puts a
+line break inside a cell, and the editor grows to fit; plain `Enter` still commits and moves down. Select-type cells open a dropdown on a
 single click. Column headers show an error count that filters the grid to that column's problems.
 
 ---

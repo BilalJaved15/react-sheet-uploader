@@ -498,6 +498,72 @@ describe('SheetUploader', () => {
     });
   });
 
+  describe('line breaks in a cell', () => {
+    /** Opens the review grid and starts editing the first Last Name cell. */
+    async function editLastName(user: ReturnType<typeof userEvent.setup>) {
+      render(<Harness onResults={vi.fn()} />);
+      await openToReview(user);
+
+      const cell = document.querySelector('[data-rsu-cell$=":lastName"]') as HTMLElement;
+      await user.dblClick(cell);
+      return document.querySelector('.rsu-grid-editor') as HTMLTextAreaElement;
+    }
+
+    it('edits through a textarea, which is the only control that can hold one', async () => {
+      const user = userEvent.setup();
+      const editor = await editLastName(user);
+
+      expect(editor.tagName).toBe('TEXTAREA');
+    });
+
+    it.each([
+      ['Alt+Enter', '{Alt>}{Enter}{/Alt}'],
+      ['Shift+Enter', '{Shift>}{Enter}{/Shift}'],
+    ])('inserts a line break on %s', async (_label, keys) => {
+      const user = userEvent.setup();
+      const editor = await editLastName(user);
+
+      await user.clear(editor);
+      await user.type(editor, 'Ada');
+      await user.keyboard(keys);
+      await user.type(editor, 'Lovelace');
+
+      expect(editor.value).toBe('Ada\nLovelace');
+    });
+
+    it('submits the line break rather than flattening it', async () => {
+      const user = userEvent.setup();
+      const onResults = vi.fn();
+      render(<Harness onResults={onResults} />);
+      await openToReview(user);
+
+      const cell = document.querySelector('[data-rsu-cell$=":lastName"]') as HTMLElement;
+      await user.dblClick(cell);
+      const editor = document.querySelector('.rsu-grid-editor') as HTMLTextAreaElement;
+      await user.clear(editor);
+      await user.type(editor, 'Ada');
+      await user.keyboard('{Alt>}{Enter}{/Alt}');
+      await user.type(editor, 'Lovelace{Enter}');
+
+      await user.click(screen.getByRole('button', { name: 'Submit' }));
+      await waitFor(() => expect(onResults).toHaveBeenCalled());
+
+      const [data] = onResults.mock.calls[0] as [ResultRow[]];
+      expect(data[0]?.lastName).toBe('Ada\nLovelace');
+    });
+
+    it('still commits on an unmodified Enter', async () => {
+      const user = userEvent.setup();
+      const editor = await editLastName(user);
+
+      await user.clear(editor);
+      await user.type(editor, 'Lovelace{Enter}');
+
+      expect(document.querySelector('.rsu-grid-editor')).toBeNull();
+      expect(screen.getByRole('grid').textContent).toContain('Lovelace');
+    });
+  });
+
   it('hands the original file back for archiving', async () => {
     const user = userEvent.setup();
     const onResults = vi.fn();

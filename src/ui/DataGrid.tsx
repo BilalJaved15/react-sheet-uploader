@@ -18,6 +18,8 @@ export const COL_WIDTH = 190;
 export const GUTTER_WIDTH = 76;
 const HEADER_HEIGHT = 46;
 const OVERSCAN = 6;
+/** How far the editor may grow over the rows below before it scrolls instead. */
+const EDITOR_MAX_HEIGHT = 148;
 
 export interface CellAddress {
   recordId: string;
@@ -63,13 +65,79 @@ interface TooltipState {
   messages: InfoMessage[];
 }
 
-/** Splits pasted clipboard text into a grid. Excel and Sheets both emit TSV. */
+/** True when the character appears outside a quoted section. */
+function hasUnquoted(text: string, char: string): boolean {
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const current = text[index];
+    if (current === '"') {
+      if (quoted && text[index + 1] === '"') index += 1;
+      else quoted = !quoted;
+    } else if (current === char && !quoted) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Splits pasted clipboard text into a grid. Excel and Sheets both emit TSV,
+ * quoting any field that holds the delimiter, a quote or a line break — so the
+ * parser has to honour quoting, or a cell containing a line break would paste
+ * back in as two rows.
+ */
 function parseClipboardGrid(text: string): string[][] {
   const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-  const trimmed = normalized.endsWith('\n') ? normalized.slice(0, -1) : normalized;
-  if (trimmed === '') return [];
-  const delimiter = trimmed.includes('\t') ? '\t' : ',';
-  return trimmed.split('\n').map((line) => line.split(delimiter));
+  // A lone newline carries no cells; anything else may legitimately be blank.
+  if (normalized === '' || normalized === '\n') return [];
+
+  // Only a delimiter outside quotes says anything about the shape, so the
+  // sniff has to skip quoted sections as well.
+  const delimiter = hasUnquoted(normalized, '\t') ? '\t' : ',';
+
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let value = '';
+  let quoted = false;
+
+  for (let index = 0; index < normalized.length; index += 1) {
+    const char = normalized[index];
+
+    if (quoted) {
+      if (char !== '"') {
+        value += char;
+      } else if (normalized[index + 1] === '"') {
+        value += '"';
+        index += 1;
+      } else {
+        quoted = false;
+      }
+      continue;
+    }
+
+    if (char === '"' && value === '') {
+      quoted = true;
+    } else if (char === delimiter) {
+      row.push(value);
+      value = '';
+    } else if (char === '\n') {
+      row.push(value);
+      rows.push(row);
+      row = [];
+      value = '';
+    } else {
+      value += char;
+    }
+  }
+
+  // A trailing newline has already closed the last row; anything else leaves
+  // one still open.
+  if (value !== '' || row.length > 0) {
+    row.push(value);
+    rows.push(row);
+  }
+
+  return rows;
 }
 
 /** Quotes a value for the TSV placed on the clipboard. */
@@ -295,7 +363,9 @@ export function DataGrid({
 
     if (!active) return;
     const record = records[recordIndexById.get(active.recordId) ?? -1];
-    void navigator.clipboard?.writeText(record?.cells[active.fieldKey]?.value ?? '');
+    // Escaped like the multi-row form above: an unquoted line break would come
+    // back from the clipboard as two rows rather than one multi-line cell.
+    void navigator.clipboard?.writeText(tsvEscape(record?.cells[active.fieldKey]?.value ?? ''));
   }, [active, recordIndexById, records, selectedIds, visibleFields]);
 
   const handlePaste = useCallback(
@@ -807,6 +877,7 @@ export function DataGrid({
                       'rsu-grid-cell',
                       severity ? `rsu-grid-cell--${severity}` : '',
                       isActive ? 'rsu-grid-cell--active' : '',
+                      isEditing ? 'rsu-grid-cell--editing' : '',
                       field.readOnly ? 'rsu-grid-cell--readonly' : '',
                       isPicker ? 'rsu-grid-cell--picker' : '',
                       highlightAutoFixes && cell.autofixed ? 'rsu-grid-cell--autofixed' : '',
@@ -939,24 +1010,68 @@ interface CellEditorProps {
 /**
  * The text editor for a cell. Select-like fields never reach here — they are
  * edited through `SelectPopover`, which opens on a single click.
+ *
+ * It is a textarea rather than an input so a value can hold line breaks: an
+ * input silently drops them, which made multi-line cells impossible to type
+ * even though every other layer carries them through untouched.
  */
 function CellEditor({ field, value, onChange, onCommit }: CellEditorProps) {
-  const inputRef = useRef<HTMLInputElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const pendingCaret = useRef<number | null>(null);
 
   useEffect(() => {
     inputRef.current?.focus();
     inputRef.current?.select();
   }, []);
 
+  useLayoutEffect(() => {
+    const element = inputRef.current;
+    if (!element) return;
+
+    // React has just re-rendered with the inserted break, so the caret has
+    // collapsed to the end; put it back where the user was typing.
+    if (pendingCaret.current !== null) {
+      element.setSelectionRange(pendingCaret.current, pendingCaret.current);
+      pendingCaret.current = null;
+    }
+
+    // Grow over the rows below rather than scrolling a 34px slot, so the whole
+    // value stays readable while it is being edited.
+    element.style.height = 'auto';
+    element.style.height = `${Math.min(element.scrollHeight, EDITOR_MAX_HEIGHT)}px`;
+  }, [value]);
+
+  const insertLineBreak = () => {
+    const element = inputRef.current;
+    if (!element) return;
+
+    const start = element.selectionStart ?? value.length;
+    const end = element.selectionEnd ?? start;
+    pendingCaret.current = start + 1;
+    onChange(`${value.slice(0, start)}\n${value.slice(end)}`);
+  };
+
   return (
-    <input
+    <textarea
       ref={inputRef}
       className="rsu-grid-editor"
+      rows={1}
       // A number field still takes text: the coercion layer accepts "$1,234.56",
       // which a native number input would refuse to hold.
       inputMode={field.typeName === 'number' ? 'decimal' : undefined}
       value={value}
       onChange={(event) => onChange(event.target.value)}
+      onKeyDown={(event) => {
+        // Alt+Enter (Excel) and Shift+Enter (Sheets) add a line break. Plain
+        // Enter still commits and moves down, so the grid keeps the reflex
+        // people bring to it; the grid's own handler owns that, which is why
+        // only the modified form stops here.
+        if (event.key === 'Enter' && (event.altKey || event.shiftKey)) {
+          event.preventDefault();
+          event.stopPropagation();
+          insertLineBreak();
+        }
+      }}
       onBlur={onCommit}
     />
   );
