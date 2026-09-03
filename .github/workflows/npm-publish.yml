@@ -1,0 +1,256 @@
+name: Publish to npm
+
+# Publishes whenever the version in package.json changes on main.
+#
+# Release flow for maintainers:
+#   1. yarn version patch | minor | major   (or edit package.json by hand)
+#   2. push to main
+#   3. this workflow tests, builds, publishes to npm, tags the commit and
+#      cuts a GitHub release
+#
+# The registry itself is the source of truth: if the version in package.json is
+# already on npm, the run exits without publishing. That makes re-runs, reverts
+# and pushes that touch package.json without bumping the version all safe.
+#
+# Pre-release versions (e.g. 0.4.0-beta.1) are published under a matching npm
+# dist-tag (beta) instead of latest, and do not get a GitHub release.
+#
+# Required secret: NPM_TOKEN — an npm automation token with publish rights.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'package.json'
+  workflow_dispatch:
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish on version bump
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the release tag and create the GitHub release
+      id-token: write # npm provenance attestation
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so release notes can diff against the previous tag
+
+      - name: Enable Corepack
+        # The repo pins yarn via packageManager; Corepack must be enabled before
+        # setup-node's yarn cache can resolve it.
+        run: corepack enable
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'yarn'
+
+      - name: Read package metadata
+        id: pkg
+        run: |
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+
+          # Pre-release versions go out under their own dist-tag so they never
+          # become `latest`: 0.4.0-beta.1 -> beta, 0.4.0-rc.2 -> rc.
+          if [[ "$VERSION" == *-* ]]; then
+            NPM_TAG=$(echo "${VERSION#*-}" | cut -d. -f1)
+            IS_PRERELEASE=true
+          else
+            NPM_TAG=latest
+            IS_PRERELEASE=false
+          fi
+
+          {
+            echo "name=$NAME"
+            echo "version=$VERSION"
+            echo "npm_tag=$NPM_TAG"
+            echo "is_prerelease=$IS_PRERELEASE"
+          } >> "$GITHUB_OUTPUT"
+
+          # Previous version is informational only (used for the run summary).
+          PREVIOUS=$(git show HEAD~1:package.json 2>/dev/null | node -p "try{JSON.parse(require('fs').readFileSync(0,'utf8')).version}catch(e){''}" || echo "")
+          echo "previous=$PREVIOUS" >> "$GITHUB_OUTPUT"
+
+          echo "$NAME@$VERSION (previous commit: ${PREVIOUS:-unknown}, dist-tag: $NPM_TAG)"
+
+      - name: Check whether this version is already on npm
+        id: check
+        run: |
+          NAME="${{ steps.pkg.outputs.name }}"
+          VERSION="${{ steps.pkg.outputs.version }}"
+          # Scoped names must be URL-encoded for the registry path.
+          ENCODED_NAME="${NAME//\//%2f}"
+          URL="https://registry.npmjs.org/$ENCODED_NAME/$VERSION"
+
+          # Retry so a transient registry blip is never mistaken for "unpublished".
+          STATUS=""
+          for attempt in 1 2 3; do
+            STATUS=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$URL" || echo "000")
+            case "$STATUS" in
+              200|404) break ;;
+              *) echo "Attempt $attempt: registry returned $STATUS, retrying..." ; sleep $((attempt * 5)) ;;
+            esac
+          done
+
+          case "$STATUS" in
+            404)
+              echo "should_publish=true" >> "$GITHUB_OUTPUT"
+              echo "✅ $NAME@$VERSION is not on npm yet — publishing."
+              ;;
+            200)
+              echo "should_publish=false" >> "$GITHUB_OUTPUT"
+              echo "⏭️ $NAME@$VERSION is already published — nothing to do."
+              ;;
+            *)
+              echo "::error::Could not determine whether $NAME@$VERSION is published (registry status: $STATUS)."
+              exit 1
+              ;;
+          esac
+
+      - name: Verify NPM_TOKEN is configured
+        if: steps.check.outputs.should_publish == 'true'
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "::error::NPM_TOKEN secret is not set. Add an npm automation token under Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+
+      - name: Install dependencies
+        if: steps.check.outputs.should_publish == 'true'
+        run: yarn install --immutable
+
+      - name: Typecheck
+        if: steps.check.outputs.should_publish == 'true'
+        run: yarn typecheck
+
+      - name: Test
+        if: steps.check.outputs.should_publish == 'true'
+        run: yarn test
+
+      - name: Build package
+        if: steps.check.outputs.should_publish == 'true'
+        run: yarn build
+
+      - name: Verify build output
+        if: steps.check.outputs.should_publish == 'true'
+        run: |
+          # Every entry point package.json advertises must actually exist, or the
+          # published package would be broken for consumers.
+          MISSING=0
+          for FIELD in main module types; do
+            TARGET=$(node -p "require('./package.json').$FIELD || ''")
+            if [ -n "$TARGET" ] && [ ! -f "$TARGET" ]; then
+              echo "::error::package.json \"$FIELD\" points at $TARGET, which the build did not produce."
+              MISSING=1
+            fi
+          done
+
+          STYLES=$(node -p "require('./package.json').exports['./styles.css'] || ''")
+          if [ -n "$STYLES" ] && [ ! -f "$STYLES" ]; then
+            echo "::error::exports \"./styles.css\" points at $STYLES, which the build did not produce."
+            MISSING=1
+          fi
+
+          [ "$MISSING" -eq 0 ] || exit 1
+
+          echo "All advertised entry points present."
+          echo "Tarball contents:"
+          npm pack --dry-run
+
+      - name: Publish to npm
+        if: steps.check.outputs.should_publish == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          # Provenance requires a public repo; set the NPM_PROVENANCE repository
+          # variable to "false" to turn it off.
+          PROVENANCE=""
+          if [ "${{ vars.NPM_PROVENANCE }}" != "false" ]; then
+            PROVENANCE="--provenance"
+          fi
+
+          npm publish --tag "${{ steps.pkg.outputs.npm_tag }}" --access public $PROVENANCE
+
+      - name: Create and push release tag
+        if: steps.check.outputs.should_publish == 'true'
+        run: |
+          TAG="v${{ steps.pkg.outputs.version }}"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists on origin — leaving it as is."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "refs/tags/$TAG"
+
+      - name: Create GitHub release
+        if: steps.check.outputs.should_publish == 'true' && steps.pkg.outputs.is_prerelease == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${{ steps.pkg.outputs.version }}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — skipping."
+            exit 0
+          fi
+
+          # Diff against the previous tag when there is one, so notes only cover
+          # this release.
+          PREVIOUS_TAG=$(git tag --sort=-creatordate | grep -v "^$TAG$" | head -n 1)
+
+          if [ -n "$PREVIOUS_TAG" ]; then
+            gh release create "$TAG" \
+              --title "Release $TAG" \
+              --generate-notes \
+              --notes-start-tag "$PREVIOUS_TAG"
+          else
+            gh release create "$TAG" \
+              --title "Release $TAG" \
+              --generate-notes
+          fi
+
+      - name: Summary
+        if: always() && steps.check.outputs.should_publish != ''
+        run: |
+          NAME="${{ steps.pkg.outputs.name }}"
+          VERSION="${{ steps.pkg.outputs.version }}"
+
+          if [ "${{ steps.check.outputs.should_publish }}" != "true" ]; then
+            {
+              echo "### ⏭️ No version bump"
+              echo ""
+              echo "\`$NAME@$VERSION\` is already published on npm. Nothing to do."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          {
+            echo "### 🚀 Published \`$NAME@$VERSION\`"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Previous version | \`${{ steps.pkg.outputs.previous }}\` |"
+            echo "| npm dist-tag | \`${{ steps.pkg.outputs.npm_tag }}\` |"
+            echo "| Git tag | \`v$VERSION\` |"
+            echo ""
+            echo "**npm:** https://www.npmjs.com/package/$NAME/v/$VERSION"
+          } >> "$GITHUB_STEP_SUMMARY"

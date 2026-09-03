@@ -548,6 +548,37 @@ yarn test
 yarn build
 ```
 
+### Releasing
+
+Releases are driven by the **version in `package.json`**. Whenever that version
+changes on `main`, the [`Publish to npm`](.github/workflows/npm-publish.yml)
+workflow typechecks, tests, builds and publishes the package.
+
+```bash
+yarn version patch   # or minor / major
+git push origin main
+```
+
+Editing the `version` field by hand works the same way — the workflow only cares
+that the version changed. On a bump it also pushes a `v<version>` tag and cuts a
+GitHub release.
+
+npm is the source of truth: if the version in `package.json` is already
+published, the run exits without publishing, so re-runs, reverts and
+`package.json` edits that leave the version alone are all no-ops.
+
+Pre-release versions go out under a matching npm dist-tag rather than `latest`,
+and skip the GitHub release:
+
+```bash
+yarn version 0.4.0-beta.1   # published as `beta`
+```
+
+Publishing requires an `NPM_TOKEN` secret (an npm automation token with publish
+rights) under *Settings → Secrets and variables → Actions*. Provenance
+attestation is on by default; set the `NPM_PROVENANCE` repository variable to
+`false` to disable it.
+
 ## License
 
 MIT
