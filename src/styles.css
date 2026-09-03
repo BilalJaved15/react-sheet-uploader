@@ -1236,14 +1236,19 @@
   background: var(--rsu-error-subtle);
 }
 
+/* Top-aligned rather than centred: a row is exactly as tall as its content, so
+   the two agree on one line, and a cell tall enough to clip should lose its
+   last line rather than the first. The padding matches the editor's, so opening
+   one does not shift the text it replaces. */
 .rsu-grid-cell {
   position: relative;
   display: flex;
   flex-shrink: 0;
-  align-items: center;
-  padding: 0 10px;
+  align-items: flex-start;
+  padding: 7px 10px;
   overflow: hidden;
   font-size: 13px;
+  line-height: 20px;
   white-space: nowrap;
   text-overflow: ellipsis;
   background: var(--rsu-surface);
@@ -1252,9 +1257,11 @@
   cursor: cell;
 }
 
+/* `pre` keeps the line breaks the row was sized for. It also stops wrapping,
+   which is what `nowrap` did before: a long single line still ellipsises. */
 .rsu-grid-cell-text {
   overflow: hidden;
-  white-space: nowrap;
+  white-space: pre;
   text-overflow: ellipsis;
 }
 

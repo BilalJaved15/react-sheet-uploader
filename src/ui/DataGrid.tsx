@@ -2,8 +2,10 @@
  * The review grid.
  *
  * Windowed rather than fully rendered: imports of 50k rows are ordinary, and
- * only the ~20 rows in view are mounted at a time. Row height and column width
- * are fixed constants so a row's position is arithmetic rather than measurement.
+ * only the ~20 rows in view are mounted at a time. Column width is a fixed
+ * constant, and a row is one line tall plus a line for every break its widest
+ * cell holds — counted from the text, never measured — so a row's position
+ * stays arithmetic: a running total, binary searched.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -18,6 +20,10 @@ export const COL_WIDTH = 190;
 export const GUTTER_WIDTH = 76;
 const HEADER_HEIGHT = 46;
 const OVERSCAN = 6;
+/** One line of cell text. ROW_HEIGHT is this plus 7px of padding either side. */
+const LINE_HEIGHT = 20;
+/** A row grows to fit its tallest cell up to here, then that cell clips. */
+const MAX_ROW_LINES = 6;
 /** How far the editor may grow over the rows below before it scrolls instead. */
 const EDITOR_MAX_HEIGHT = 148;
 
@@ -140,6 +146,42 @@ function parseClipboardGrid(text: string): string[][] {
   return rows;
 }
 
+/**
+ * Lines a value occupies. Counts explicit breaks only — no wrapping, so this
+ * stays derivable from the data rather than needing the cell to be measured.
+ */
+function lineCount(value: string): number {
+  if (!value.includes('\n')) return 1;
+
+  let lines = 1;
+  let index = value.indexOf('\n');
+  while (index !== -1) {
+    lines += 1;
+    index = value.indexOf('\n', index + 1);
+  }
+  return lines;
+}
+
+/**
+ * Index of the last row whose top edge is at or above `y`.
+ *
+ * Rows are no longer a uniform height, so their positions come from a running
+ * total instead of a multiplication. Binary searching it keeps locating the
+ * first visible row logarithmic rather than a scan of every record.
+ */
+function rowAtOffset(offsets: readonly number[], y: number): number {
+  let low = 0;
+  let high = offsets.length - 2;
+
+  while (low < high) {
+    const mid = (low + high + 1) >> 1;
+    if ((offsets[mid] ?? 0) <= y) low = mid;
+    else high = mid - 1;
+  }
+
+  return Math.max(0, low);
+}
+
 /** Quotes a value for the TSV placed on the clipboard. */
 function tsvEscape(value: string): string {
   return /[\t\n"]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
@@ -216,10 +258,43 @@ export function DataGrid({
     setTooltip(null);
   }, []);
 
-  const startIndex = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
+  /**
+   * Per-row heights and the running total of where each row starts.
+   *
+   * A row is as tall as its tallest cell, so a value with line breaks shows
+   * them instead of collapsing to one line. Heights come from the text itself,
+   * which keeps a row's position arithmetic — the whole reason 50k rows scroll
+   * smoothly — rather than something the DOM has to be asked for.
+   */
+  const rowMetrics = useMemo(() => {
+    const heights: number[] = [];
+    const offsets: number[] = [0];
+    let total = 0;
+
+    for (const record of records) {
+      let lines = 1;
+      for (const field of visibleFields) {
+        const value = record.cells[field.key]?.value;
+        if (value) {
+          const count = lineCount(value);
+          if (count > lines) lines = count;
+        }
+      }
+
+      const height = ROW_HEIGHT + (Math.min(lines, MAX_ROW_LINES) - 1) * LINE_HEIGHT;
+      heights.push(height);
+      total += height;
+      offsets.push(total);
+    }
+
+    return { heights, offsets, totalHeight: total };
+    // Records mutate in place, so dataVersion is what says the text changed.
+  }, [records, dataVersion, visibleFields]);
+
+  const startIndex = Math.max(0, rowAtOffset(rowMetrics.offsets, scrollTop) - OVERSCAN);
   const endIndex = Math.min(
     records.length,
-    Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT) + OVERSCAN,
+    rowAtOffset(rowMetrics.offsets, scrollTop + viewportHeight) + 1 + OVERSCAN,
   );
   const windowed = records.slice(startIndex, endIndex);
 
@@ -229,8 +304,8 @@ export function DataGrid({
       const rowIndex = recordIndexById.get(address.recordId);
       if (!element || rowIndex === undefined) return;
 
-      const top = rowIndex * ROW_HEIGHT;
-      const bottom = top + ROW_HEIGHT;
+      const top = rowMetrics.offsets[rowIndex] ?? 0;
+      const bottom = top + (rowMetrics.heights[rowIndex] ?? ROW_HEIGHT);
 
       // The sticky header covers the top of the scroll box.
       if (top < element.scrollTop + HEADER_HEIGHT) {
@@ -249,7 +324,7 @@ export function DataGrid({
         }
       }
     },
-    [recordIndexById, visibleFields],
+    [recordIndexById, rowMetrics, visibleFields],
   );
 
   useEffect(() => {
@@ -809,11 +884,12 @@ export function DataGrid({
             })}
           </div>
 
-          <div className="rsu-grid-rows" style={{ height: records.length * ROW_HEIGHT }}>
+          <div className="rsu-grid-rows" style={{ height: rowMetrics.totalHeight }}>
             {windowed.map((record, offset) => {
               const rowIndex = startIndex + offset;
               const isActiveRow = active?.recordId === record.id;
               const isSelected = selectedIds.has(record.id);
+              const rowHeight = rowMetrics.heights[rowIndex] ?? ROW_HEIGHT;
 
               return (
                 <div
@@ -821,7 +897,7 @@ export function DataGrid({
                   className={`rsu-grid-row${isSelected ? ' rsu-grid-row--selected' : ''}${
                     isActiveRow ? ' rsu-grid-row--active' : ''
                   }`}
-                  style={{ top: rowIndex * ROW_HEIGHT, height: ROW_HEIGHT }}
+                  style={{ top: rowMetrics.offsets[rowIndex] ?? 0, height: rowHeight }}
                   role="row"
                   aria-rowindex={rowIndex + 2}
                   aria-selected={isSelected}
@@ -891,7 +967,7 @@ export function DataGrid({
                       <div
                         key={field.key}
                         className={classes}
-                        style={{ width: COL_WIDTH, height: ROW_HEIGHT }}
+                        style={{ width: COL_WIDTH, height: rowHeight }}
                         role="gridcell"
                         aria-invalid={severity === 'error'}
                         data-rsu-cell={`${record.id}:${field.key}`}

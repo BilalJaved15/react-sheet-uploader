@@ -552,6 +552,97 @@ describe('SheetUploader', () => {
       expect(data[0]?.lastName).toBe('Ada\nLovelace');
     });
 
+    /**
+     * Rows are no longer a uniform height, so a row's position is a running
+     * total rather than `index * ROW_HEIGHT`. These cover the arithmetic that
+     * replaced it, which every windowed import depends on.
+     */
+    describe('rows sized to their tallest cell', () => {
+      /** 60 rows, with a three-line Last Name on the one at `tallAt` (0-based). */
+      function tallRowCsv(tallAt: number, lines = 3) {
+        const rows = Array.from({ length: 60 }, (_, index) => {
+          const surname = index === tallAt
+            ? `"${Array.from({ length: lines }, (_, l) => `line ${l + 1}`).join('\n')}"`
+            : `Surname${index}`;
+          return `Person${index},${surname},person${index}@example.com`;
+        });
+        return ['First Name,surname,Email', ...rows].join('\n');
+      }
+
+      /** Every mounted row, as { index, top, height }, ordered by position. */
+      const mountedRows = () =>
+        [...document.querySelectorAll('.rsu-grid-row')]
+          .map((row) => {
+            const element = row as HTMLElement;
+            return {
+              index: Number(element.getAttribute('aria-rowindex')) - 2,
+              top: parseFloat(element.style.top),
+              height: parseFloat(element.style.height),
+            };
+          })
+          .sort((a, b) => a.index - b.index);
+
+      it('gives a multi-line row one extra line of height, and leaves the rest alone', async () => {
+        const user = userEvent.setup();
+        render(<Harness />);
+        await openToReview(user, csvFile(tallRowCsv(2)));
+
+        const rows = mountedRows();
+        expect(rows.find((row) => row.index === 2)?.height).toBe(34 + 2 * 20);
+        expect(rows.find((row) => row.index === 1)?.height).toBe(34);
+        expect(rows.find((row) => row.index === 3)?.height).toBe(34);
+      });
+
+      it('stacks every row against the running total, not a fixed step', async () => {
+        const user = userEvent.setup();
+        render(<Harness />);
+        await openToReview(user, csvFile(tallRowCsv(2)));
+
+        // Each row starts exactly where the one above it ends.
+        const rows = mountedRows();
+        rows.forEach((row, offset) => {
+          const previous = rows[offset - 1];
+          expect(row.top).toBe(previous ? previous.top + previous.height : 0);
+        });
+
+        // And the scroll area is the sum of them all: 59 single + 1 triple.
+        const spacer = document.querySelector('.rsu-grid-rows') as HTMLElement;
+        expect(parseFloat(spacer.style.height)).toBe(59 * 34 + 74);
+      });
+
+      it('finds the right first row when scrolled past a tall one', async () => {
+        const user = userEvent.setup();
+        render(<Harness />);
+        await openToReview(user, csvFile(tallRowCsv(2)));
+
+        // Rows 0-1 are 34 each and row 2 is 74, so row 20 starts at 40 + 74 +
+        // 17 * 34. Landing on it exactly is what the offset search must get
+        // right; a fixed-step guess would be two rows out by here.
+        const scroller = document.querySelector('.rsu-grid') as HTMLElement;
+        const target = 2 * 34 + 74 + 17 * 34;
+
+        await act(async () => {
+          scroller.scrollTop = target;
+          scroller.dispatchEvent(new Event('scroll', { bubbles: true }));
+        });
+
+        const rows = mountedRows();
+        const landed = rows.find((row) => row.top === target);
+        expect(landed?.index).toBe(20);
+        // The overscan sits above it rather than the window starting late.
+        expect(rows[0]?.index).toBe(14);
+      });
+
+      it('caps a pathological row instead of letting one cell own the viewport', async () => {
+        const user = userEvent.setup();
+        render(<Harness />);
+        await openToReview(user, csvFile(tallRowCsv(2, 40)));
+
+        // Six lines is the ceiling; the cell clips past it.
+        expect(mountedRows().find((row) => row.index === 2)?.height).toBe(34 + 5 * 20);
+      });
+    });
+
     it('still commits on an unmodified Enter', async () => {
       const user = userEvent.setup();
       const editor = await editLastName(user);
