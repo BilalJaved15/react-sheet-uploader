@@ -1,6 +1,6 @@
 {
   "name": "react-sheet-uploader",
-  "version": "0.3.0",
+  "version": "1.0.0",
   "description": "Open-source, embeddable spreadsheet importer for React. Drop-in compatible with the Dromo uploader API: same fields schema, settings, row/bulk/column/step hooks, and results shape.",
   "license": "MIT",
   "author": "BilalJaved15",
