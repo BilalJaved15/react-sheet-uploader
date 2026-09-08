@@ -6,6 +6,7 @@
  */
 
 import type { Field } from '../types';
+import { triggerDownload } from './export';
 import { normalizeField } from './fieldTypes';
 
 /** Quotes a value only when it would otherwise break the row. */
@@ -67,19 +68,6 @@ function exampleFor(field: ReturnType<typeof normalizeField>): string {
 
 /** Triggers a browser download of the generated template. */
 export function downloadTemplate(fields: Field[], filename: string): void {
-  if (typeof document === 'undefined') return;
-
-  const csv = buildTemplateCsv(fields);
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename.toLowerCase().endsWith('.csv') ? filename : `${filename}.csv`;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-
-  // Revoking immediately can cancel the download in some browsers.
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  const name = filename.toLowerCase().endsWith('.csv') ? filename : `${filename}.csv`;
+  triggerDownload(buildTemplateCsv(fields), name, 'text/csv;charset=utf-8');
 }

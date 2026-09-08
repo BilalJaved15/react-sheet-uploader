@@ -1,9 +1,11 @@
 import { useCallback, useMemo, useState } from 'react';
+import { downloadExport, type ExportFormat } from '../../core/export';
 import type { NormalizedField } from '../../core/fieldTypes';
 import { cellMessages, messageLevel, recordHasError, type InternalRecord } from '../../core/model';
 import type { ReviewStepSettings } from '../../types';
 import { Button } from '../components/Button';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { ExportMenu } from '../components/ExportMenu';
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -57,6 +59,7 @@ export function ReviewStep({
 
   const allowAddingRows = settings.allowAddingRows ?? true;
   const allowRemovingRows = settings.allowRemovingRows ?? true;
+  const enableExport = settings.enableExport ?? true;
 
   const { errorRows, warningRows, columnErrorCounts } = useMemo(() => {
     let errors = 0;
@@ -157,6 +160,20 @@ export function ReviewStep({
     });
   }, [fields, records, selectedIds]);
 
+  /**
+   * Downloads what the grid is showing: the checked rows if there are any,
+   * otherwise every row that survives the current filters and search. Invalid
+   * rows are included — the point of the download is to keep the work, and
+   * whatever is wrong with a row is easier to fix in a spreadsheet.
+   */
+  const exportRows = useCallback(
+    (format: ExportFormat) => {
+      const rows = selectedIds.size > 0 ? visible.filter((record) => selectedIds.has(record.id)) : visible;
+      downloadExport(rows, fields, format, settings.exportFilename ?? 'import');
+    },
+    [fields, selectedIds, settings.exportFilename, visible],
+  );
+
   const confirmDelete = useCallback(() => {
     if (pendingDelete) {
       onDeleteRows(pendingDelete);
@@ -235,6 +252,14 @@ export function ReviewStep({
           )}
 
           <div className="rsu-toolbar-spacer" />
+
+          {enableExport && (
+            <ExportMenu
+              rowCount={selectedIds.size > 0 ? selectedIds.size : visible.length}
+              selectionOnly={selectedIds.size > 0}
+              onExport={exportRows}
+            />
+          )}
 
           {selectedCount > 0 ? (
             <div className="rsu-selection-actions">

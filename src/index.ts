@@ -134,5 +134,7 @@ export { valueTypeScore } from './core/valueSignals';
 export { buildRecords, runPipeline } from './core/pipeline';
 export { buildResults, canSubmit } from './core/results';
 export { buildTemplateCsv, downloadTemplate } from './core/template';
+export { buildExport, downloadExport, EXPORT_FORMATS } from './core/export';
+export type { ExportFormat } from './core/export';
 export { parseFile, FileParseError } from './parsers';
 export type { ParsedFile, ParsedSheet } from './parsers';

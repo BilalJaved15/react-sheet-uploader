@@ -52,6 +52,13 @@ export function UploaderModal(props: UploaderModalProps) {
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        // This listener captures, so it runs before anything inside the dialog
+        // can claim the key. An open cell editor, an open dropdown or a block
+        // of selected cells all want Escape for themselves — closing the whole
+        // import instead would throw away the user's work.
+        const target = event.target as HTMLElement | null;
+        if (target?.closest('[data-rsu-escape], .rsu-popover')) return;
+
         event.stopPropagation();
         cancel();
         return;

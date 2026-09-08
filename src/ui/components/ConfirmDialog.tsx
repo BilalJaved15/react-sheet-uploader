@@ -42,7 +42,9 @@ export function ConfirmDialog({
   }, [onCancel]);
 
   return (
-    <div className="rsu-confirm-overlay" onMouseDown={onCancel}>
+    // `data-rsu-escape` keeps the modal's own Escape handler — which captures,
+    // so it runs before the one below — from closing the whole import.
+    <div className="rsu-confirm-overlay" onMouseDown={onCancel} data-rsu-escape="true">
       <div
         className="rsu-confirm-dialog"
         role="alertdialog"

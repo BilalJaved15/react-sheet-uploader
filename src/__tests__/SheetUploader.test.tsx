@@ -532,6 +532,162 @@ describe('SheetUploader', () => {
       expect(wrapped?.split(':')[0]).not.toBe(firstRowId);
     });
 
+    it('extends a block of cells with Shift and the arrow keys', async () => {
+      const user = userEvent.setup();
+      await openGrid(user);
+
+      await user.click(document.querySelector('[data-rsu-cell$=":firstName"]') as HTMLElement);
+      expect(document.querySelectorAll('.rsu-grid-cell--range')).toHaveLength(0);
+
+      await user.keyboard('{Shift>}{ArrowDown}{/Shift}');
+      expect(document.querySelectorAll('.rsu-grid-cell--range')).toHaveLength(2);
+
+      await user.keyboard('{Shift>}{ArrowRight}{/Shift}');
+      expect(document.querySelectorAll('.rsu-grid-cell--range')).toHaveLength(4);
+
+      // Escape gives the block back without moving the active cell.
+      await user.keyboard('{Escape}');
+      expect(document.querySelectorAll('.rsu-grid-cell--range')).toHaveLength(0);
+    });
+
+    it('extends a block to a shift-clicked cell', async () => {
+      const user = userEvent.setup();
+      await openGrid(user);
+
+      await user.click(document.querySelector('[data-rsu-cell$=":firstName"]') as HTMLElement);
+      const secondRowEmail = document.querySelectorAll('[data-rsu-cell$=":email"]')[1] as HTMLElement;
+      await user.keyboard('{Shift>}');
+      await user.click(secondRowEmail);
+      await user.keyboard('{/Shift}');
+
+      expect(document.querySelectorAll('.rsu-grid-cell--range')).toHaveLength(6);
+    });
+
+    it('copies a block as tab-separated rows', async () => {
+      const user = userEvent.setup();
+      await openGrid(user);
+
+      await user.click(document.querySelector('[data-rsu-cell$=":firstName"]') as HTMLElement);
+      await user.keyboard('{Shift>}{ArrowRight}{ArrowDown}{/Shift}');
+      await user.keyboard('{Control>}c{/Control}');
+
+      expect(await navigator.clipboard.readText()).toBe('Ada\tLovelace\nAlan\tTuring');
+    });
+
+    it('clears a whole block on Delete, and Cmd+Z puts it back', async () => {
+      const user = userEvent.setup();
+      await openGrid(user);
+
+      const firstNames = () =>
+        [...document.querySelectorAll('[data-rsu-cell$=":firstName"]')].map(
+          (cell) => cell.textContent,
+        );
+
+      await user.click(document.querySelector('[data-rsu-cell$=":firstName"]') as HTMLElement);
+      await user.keyboard('{Shift>}{ArrowDown}{/Shift}');
+      await user.keyboard('{Delete}');
+
+      await waitFor(() => expect(firstNames()).toEqual(['', '']));
+
+      await user.keyboard('{Control>}z{/Control}');
+      await waitFor(() => expect(firstNames()).toEqual(['Ada', 'Alan']));
+
+      await user.keyboard('{Control>}{Shift>}z{/Shift}{/Control}');
+      await waitFor(() => expect(firstNames()).toEqual(['', '']));
+    });
+
+    it('fills the block down from its first row on Cmd+D', async () => {
+      const user = userEvent.setup();
+      await openGrid(user);
+
+      await user.click(document.querySelector('[data-rsu-cell$=":firstName"]') as HTMLElement);
+      await user.keyboard('{Shift>}{ArrowDown}{/Shift}');
+      await user.keyboard('{Control>}d{/Control}');
+
+      await waitFor(() =>
+        expect(
+          [...document.querySelectorAll('[data-rsu-cell$=":firstName"]')].map(
+            (cell) => cell.textContent,
+          ),
+        ).toEqual(['Ada', 'Ada']),
+      );
+    });
+
+    it('fills one pasted cell across the whole block', async () => {
+      const user = userEvent.setup();
+      await openGrid(user);
+
+      await user.click(document.querySelector('[data-rsu-cell$=":firstName"]') as HTMLElement);
+      await user.keyboard('{Shift>}{ArrowDown}{/Shift}');
+
+      await navigator.clipboard.writeText('Grace');
+      await user.paste();
+
+      await waitFor(() =>
+        expect(
+          [...document.querySelectorAll('[data-rsu-cell$=":firstName"]')].map(
+            (cell) => cell.textContent,
+          ),
+        ).toEqual(['Grace', 'Grace']),
+      );
+    });
+
+    it('selects the whole column on Cmd+Space and the whole row on Shift+Space', async () => {
+      const user = userEvent.setup();
+      await openGrid(user);
+
+      await user.click(document.querySelector('[data-rsu-cell$=":firstName"]') as HTMLElement);
+
+      await user.keyboard('{Control>}{ }{/Control}');
+      expect(document.querySelectorAll('.rsu-grid-cell--range')).toHaveLength(2);
+
+      await user.keyboard('{Shift>}{ }{/Shift}');
+      expect(document.querySelectorAll('.rsu-grid-cell--range')).toHaveLength(3);
+    });
+
+    it('keeps the first character when typing starts the edit', async () => {
+      const user = userEvent.setup();
+      await openGrid(user);
+
+      await user.click(document.querySelector('[data-rsu-cell$=":lastName"]') as HTMLElement);
+      await user.keyboard('Byron{Enter}');
+
+      await waitFor(() =>
+        expect(
+          (document.querySelectorAll('[data-rsu-cell$=":lastName"]')[0] as HTMLElement).textContent,
+        ).toBe('Byron'),
+      );
+    });
+
+    it('lets Escape close the editor without closing the import', async () => {
+      const user = userEvent.setup();
+      await openGrid(user);
+
+      await user.click(document.querySelector('[data-rsu-cell$=":firstName"]') as HTMLElement);
+      await user.keyboard('Zzz{Escape}');
+
+      expect(document.querySelector('.rsu-grid-editor')).not.toBeInTheDocument();
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+      expect(
+        (document.querySelectorAll('[data-rsu-cell$=":firstName"]')[0] as HTMLElement).textContent,
+      ).toBe('Ada');
+    });
+
+    it('lets Escape give back the selection without closing the import', async () => {
+      const user = userEvent.setup();
+      await openGrid(user);
+
+      await user.click(document.querySelector('[data-rsu-cell$=":firstName"]') as HTMLElement);
+      await user.keyboard('{Shift>}{ArrowDown}{/Shift}{Escape}');
+
+      expect(document.querySelectorAll('.rsu-grid-cell--range')).toHaveLength(0);
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+      // Nothing left to give back, so the next Escape closes the import.
+      await user.keyboard('{Escape}');
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
     it('keeps the keyboard working after an edit is committed', async () => {
       const user = userEvent.setup();
       await openGrid(user);
@@ -544,6 +700,95 @@ describe('SheetUploader', () => {
       // or the arrows would scroll it instead of moving.
       await user.keyboard('{ArrowRight}');
       expect(activeCell()).toMatch(/:lastName$/);
+    });
+  });
+
+  describe('exporting the grid', () => {
+    /** jsdom has no object URL factory, and cannot follow a generated link. */
+    function stubDownloads() {
+      const downloaded: string[] = [];
+
+      const urls = URL as unknown as Record<string, unknown>;
+      urls.createObjectURL = vi.fn(() => 'blob:test');
+      urls.revokeObjectURL = vi.fn();
+
+      const click = vi
+        .spyOn(HTMLAnchorElement.prototype, 'click')
+        .mockImplementation(function (this: HTMLAnchorElement) {
+          downloaded.push(this.download);
+        });
+
+      return { downloaded, restore: () => click.mockRestore() };
+    }
+
+    it('downloads a CSV of the grid from the export button', async () => {
+      const user = userEvent.setup();
+      const { downloaded, restore } = stubDownloads();
+      render(<Harness />);
+      await openToReview(user);
+
+      await user.click(screen.getByRole('button', { name: 'Export' }));
+
+      expect(downloaded).toEqual(['import.csv']);
+      restore();
+    });
+
+    it('offers the other formats behind the caret', async () => {
+      const user = userEvent.setup();
+      const { downloaded, restore } = stubDownloads();
+      render(<Harness />);
+      await openToReview(user);
+
+      await user.click(screen.getByRole('button', { name: 'Choose an export format' }));
+      await user.click(screen.getByRole('menuitem', { name: /JSON/ }));
+
+      expect(downloaded).toEqual(['import.json']);
+      restore();
+    });
+
+    it('names the file from reviewStep.exportFilename', async () => {
+      const user = userEvent.setup();
+      const { downloaded, restore } = stubDownloads();
+      render(
+        <Harness
+          settings={{
+            importIdentifier: 'Contacts',
+            reviewStep: { exportFilename: 'contacts-review' },
+          }}
+        />,
+      );
+      await openToReview(user);
+
+      await user.click(screen.getByRole('button', { name: 'Export' }));
+
+      expect(downloaded).toEqual(['contacts-review.csv']);
+      restore();
+    });
+
+    it('closes the format menu on Escape without closing the import', async () => {
+      const user = userEvent.setup();
+      render(<Harness />);
+      await openToReview(user);
+
+      await user.click(screen.getByRole('button', { name: 'Choose an export format' }));
+      expect(screen.getByRole('menu')).toBeInTheDocument();
+
+      await user.keyboard('{Escape}');
+
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+    });
+
+    it('can be turned off', async () => {
+      const user = userEvent.setup();
+      render(
+        <Harness
+          settings={{ importIdentifier: 'Contacts', reviewStep: { enableExport: false } }}
+        />,
+      );
+      await openToReview(user);
+
+      expect(screen.queryByRole('button', { name: 'Export' })).not.toBeInTheDocument();
     });
   });
 

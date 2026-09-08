@@ -389,6 +389,13 @@ export interface ReviewStepSettings {
   highlightAutoFixes?: boolean;
   /** Show the error navigation panel. Defaults to false. */
   enableNavigatingErrors?: boolean;
+  /**
+   * Offer a download of the grid's current contents (CSV, TSV or JSON).
+   * Defaults to true.
+   */
+  enableExport?: boolean;
+  /** Base name for the exported file. Defaults to `import`. */
+  exportFilename?: string;
   /** Accepted for parity; only `en` ships with this package. */
   locale?: string;
 }

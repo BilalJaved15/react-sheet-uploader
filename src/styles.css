@@ -66,6 +66,7 @@
   --rsu-grid-corner-bg: #f1f5f9;
   --rsu-grid-selection-border: var(--rsu-accent);
   --rsu-grid-selection-bg: var(--rsu-accent-subtle);
+  --rsu-grid-range-bg: var(--rsu-accent-subtle);
   --rsu-grid-header-active-bg: var(--rsu-accent-subtle);
   --rsu-grid-header-active-fg: var(--rsu-text);
   --rsu-grid-header-highlight-bg: #f1f5f9;
@@ -1011,6 +1012,79 @@
   background: #fee2e2;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Export menu                                                                 */
+/* -------------------------------------------------------------------------- */
+
+.rsu-export {
+  position: relative;
+}
+
+/* Two buttons drawn as one control: the caret shares the main button's edge,
+   so the pair reads as a split button rather than two separate actions. */
+.rsu-export-group {
+  display: flex;
+  align-items: stretch;
+}
+
+.rsu-export-main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.rsu-export-toggle {
+  padding-right: 6px;
+  padding-left: 6px;
+  margin-left: -1px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.rsu-export-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  min-width: 168px;
+  padding: 4px;
+  background: var(--rsu-surface-raised);
+  border: var(--rsu-border-strong);
+  border-radius: var(--rsu-radius-sm);
+  box-shadow: var(--rsu-shadow);
+}
+
+.rsu-export-menu-head {
+  padding: 6px 8px;
+  font-size: 11.5px;
+  color: var(--rsu-text-muted);
+}
+
+.rsu-export-menu-item {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 7px 8px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--rsu-text);
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: var(--rsu-radius-sm);
+}
+
+.rsu-export-menu-item:hover {
+  background: var(--rsu-surface-sunken);
+}
+
+.rsu-export-menu-ext {
+  font-size: 11.5px;
+  color: var(--rsu-text-faint);
+}
+
 .rsu-selection-actions {
   display: flex;
   gap: 4px;
@@ -1312,6 +1386,45 @@
 
 .rsu-grid-cell--active.rsu-grid-cell--error {
   outline-color: var(--rsu-error);
+}
+
+/* A dragged-out block of cells is one region: every cell in it is tinted, and
+   each draws only the outline edges that sit on the block's border. The tint is
+   skipped on cells that already carry a severity colour, which must not be
+   painted over — the outline still shows they are in the block. */
+.rsu-grid-cell--range:not(.rsu-grid-cell--error):not(.rsu-grid-cell--warning):not(
+    .rsu-grid-cell--info
+  ) {
+  background: var(--rsu-grid-range-bg);
+}
+
+.rsu-grid-cell--range::before {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border: 0 solid var(--rsu-grid-selection-border);
+  content: '';
+}
+
+.rsu-grid-cell--range-top::before {
+  border-top-width: 2px;
+}
+
+.rsu-grid-cell--range-bottom::before {
+  border-bottom-width: 2px;
+}
+
+.rsu-grid-cell--range-left::before {
+  border-left-width: 2px;
+}
+
+.rsu-grid-cell--range-right::before {
+  border-right-width: 2px;
+}
+
+/* Dragging a block out would otherwise drag a text selection with it. */
+.rsu-grid--dragging {
+  user-select: none;
 }
 
 /* An open editor is taller than its row whenever the value holds line breaks,

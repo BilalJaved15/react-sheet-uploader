@@ -61,8 +61,10 @@ import 'react-sheet-uploader/styles.css';
 - **17 field types** with coercion, from `email` and `phone-number` to `us-zip-code` and `uuid`.
 - **A full validator set**, including cross-row `unique` and composite `unique_with`.
 - **Hooks** — row, bulk row, column, step, row-delete and `beforeFinish`, all async-aware.
-- **An editable, virtualised review grid** — 50k rows scroll smoothly; keyboard navigation, row
-  selection, copy/paste to and from Excel, per-column error filters, and an error navigator.
+- **An editable, virtualised review grid** — 50k rows scroll smoothly; spreadsheet keyboard
+  shortcuts, multi-cell selection, fill down, undo, copy/paste to and from Excel, per-column error
+  filters, and an error navigator.
+- **Export from the review step** — download the grid as it stands as CSV, TSV or JSON.
 - **Manual entry** — start from an empty grid instead of a file.
 - **Theming** via `styleOverrides`, driven entirely by CSS custom properties.
 
@@ -222,7 +224,8 @@ settings={{
                      aiMatch, aiMatchTimeoutMs },   // see "Column matching" below
   matchValuesStep: { helpText, maxMappableSelectValues },
   reviewStep:      { helpText, processingText, allowAddingRows, allowRemovingRows,
-                     enableNavigatingErrors, highlightAutoFixes },
+                     enableNavigatingErrors, highlightAutoFixes,
+                     enableExport, exportFilename },
 }}
 ```
 
@@ -507,10 +510,46 @@ This is also how to add legacy `.xls`, by delegating to a reader of your choice.
 6. **Review** — edit, fix, and submit.
 
 In the review grid: click a cell to select it and type to edit; click a row number to select the
-whole row; `Cmd/Ctrl+C` and `Cmd/Ctrl+V` copy and paste rows to and from Excel; arrows, `Tab` and
-`Enter` navigate, and `Enter` on the last row adds another. `Shift+Enter`, `Alt+Enter` or
-`Cmd/Ctrl+Enter` puts a line break inside a cell — the grid shows it as a `↵` marker, since rows are
-a fixed height. Select-type cells open a dropdown on a single click. Column headers show an error count that filters the grid to that column's problems.
+whole row; select-type cells open a dropdown on a single click; and column headers show an error
+count that filters the grid to that column's problems.
+
+### Review grid shortcuts
+
+The grid is driven like a spreadsheet. `Cmd` is `Ctrl` on Windows and Linux.
+
+| Keys | What it does |
+| --- | --- |
+| Arrows, `Tab`, `Shift+Tab` | Move a cell. `Tab` wraps to the next row; stepping past the last row adds one |
+| `Cmd`+arrow | Jump to the first or last row, or the first or last column |
+| `Home` / `End` | First or last cell of the row. With `Cmd`, the first or last cell of the table |
+| `PageUp` / `PageDown` | Move a screen at a time |
+| `Shift`+arrow, `Shift`+`Home`/`End`/`PageUp`/`PageDown` | Extend the selection into a block of cells |
+| `Shift`+click, or click and drag | Select a block with the mouse |
+| `Shift+Space` / `Cmd+Space` | Select the whole row / the whole column |
+| `Cmd+A` | Select every cell and check every row |
+| `Escape` | Give back the block, then the checked rows |
+| `Enter`, `F2`, or any character | Edit the cell. A character replaces the value and becomes the first keystroke |
+| `Shift+Enter`, `Alt+Enter`, `Cmd+Enter` | Insert a line break inside a cell — drawn as a `↵` marker, since rows are a fixed height |
+| `Enter` / `Tab` while editing | Commit and move down / across. `Escape` cancels |
+| `Delete` / `Backspace` | Clear every editable cell in the selection |
+| `Cmd+C` / `Cmd+X` | Copy or cut the selected block, else the checked rows, else the active cell |
+| `Cmd+V` | Paste. A single copied cell fills the whole selected block; a wider clipboard spreads out from the block's top-left corner |
+| `Cmd+D` / `Cmd+R` | Fill the selection down from its first row, or right from its first column |
+| `Cmd+Z` / `Cmd+Shift+Z` | Undo or redo cell edits (adding and deleting rows is not undoable) |
+| `Space` | Check or uncheck the row |
+
+Copy and paste interoperate with Excel, Sheets and Numbers: the grid writes TSV and reads TSV or
+CSV, honouring quoted fields, so a cell containing a line break survives the round trip.
+
+### Exporting
+
+The review step has an **Export** button that downloads the grid exactly as it stands — invalid rows
+included, since the point is to keep the work in progress. CSV is the default; the caret offers TSV
+and JSON. It exports the checked rows if there are any, otherwise every row passing the current
+filter and search. Turn it off with `reviewStep: { enableExport: false }`, and name the file with
+`reviewStep: { exportFilename: 'contacts' }` (defaults to `import`).
+
+`buildExport` and `downloadExport` are also exported for headless use.
 
 ---
 
